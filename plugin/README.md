@@ -146,19 +146,17 @@ Development builds: `plugin\build.ps1 -Dev [-Test]` builds into `plugin\build-de
   peaks at or below -1.5 dBFS also on a plain C chord (SPRING RAIN, peak-limited, about -23.5 dBFS RMS).
   Renders: `examples/orbit/presets/*.wav` (written by the host test, through the VST3, not normalised).
 
-## Tests (20 Nov 2026, 1.1.0 development build)
+## Tests (20 Nov 2026, release 1.1.0)
 
-* `VintageChonkHostTest`: 113 passed, 0 failed (the 1.0.0 checks, version now 1.1.0, plus ORBIT: the effects
-  wrapper is an exact reported delay with everything off at 44.1 / 48 / 96 kHz and rings with everything on;
-  core + effects latency; no allocation on the ORBIT audio thread across MIDI, panel notes and an impulse swap;
-  block sizes on the 64 grid bit-identical, 1000 within 91 dB; CPU; YIN root key; 42 host parameters; mode switch
-  through the state with the latency reported (104 -> 347 -> 104 at 48 kHz); CHONK after ORBIT bit-identical to
-  a fresh instance; click-free cross-fade; state round trip with an embedded sample after the file is deleted;
-  the missing-sample fallback; ORBIT cutoff / output / puck automation; 8 factory presets through the VST3 and
-  their WAVs; the ORBIT editor in the running plugin, `build-dev/test_out/editor_orbit_1440x900.png`).
+* `VintageChonkHostTest`: 122 passed, 0 failed (the 1.0.0 checks plus ORBIT: effects wrapper delay exact and
+  reported at 44.1 / 48 / 96 kHz; core + effects latency (347 samples at 48 kHz); no allocation on the ORBIT
+  audio thread; mode switch through the state with the latency reported; CHONK after ORBIT bit-identical to a
+  fresh instance; click-free cross-fade; state round trip with an embedded sample after the file is deleted;
+  missing-sample fallback; ORBIT automation; 24 host programs (ORBIT 17-24 switch the mode); a real 1.0.0
+  project state loads as CHONK and renders bit-identically; every ORBIT factory preset peaks at or below -1 dBFS).
 * `test_panel_desktop.mjs`: 48 passed, 0 failed (24 CHONK + 24 ORBIT panel checks with real mouse / keyboard).
-* Steinberg validator on `plugin/dist-dev/Vintage Chonk.vst3`: 47 passed, 0 failed (`plugin/validator_log_dev_orbit.txt`).
-* CPU, 48 kHz / 256, three layers, five-note chords, effects on: 8.6-11.2 % of one core (11.4 % through the VST3).
+* Steinberg validator on the release `Vintage Chonk.vst3`: 47 passed, 0 failed.
+* CPU, 48 kHz / 256, three layers, five-note chords, effects on: about 9-11 % of one core.
 
 ## Tests (18 Nov 2026, release 1.0.0)
 
