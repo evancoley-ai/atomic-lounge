@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Vintage Chonk: engine, converter and page tests on Windows (the VST3 has its own: plugin\build.ps1 -Test).
+# Vintage Chonk: engine, ORBIT core, converter and page tests on Windows (the VST3 has its own: plugin\build.ps1 -Test).
 #   powershell -ExecutionPolicy Bypass -File run_tests.ps1
 # C compiler: $env:CC, else gcc on PATH or MSYS2 UCRT64, else clang from LLVM. Python 3 and node on PATH.
 $ErrorActionPreference = 'Stop'
@@ -19,10 +19,12 @@ $targets = [ordered]@{
     'build/test_dsp.exe'     = @('tests/dsp/test_dsp.c')
     'build/test_dsp_small.exe' = @('tests/dsp/test_dsp.c')   # with the small-memory effect sizes
     'build/test_seq.exe'     = @('tests/dsp/test_seq.c')
+    'build/test_orbit.exe'   = @('tests/orbit/test_orbit.c')   # ORBIT core (dsp/orbit)
 }
 foreach ($out in $targets.Keys) {
     $argv = [System.Collections.Generic.List[string]]::new()
     $flags | ForEach-Object { $argv.Add($_) }
+    if ($out -match 'orbit') { $argv.Add('-Idsp/orbit') }
     if ($out -match 'small') { '-DMFE_DELAY_LEN=12288', '-DMFE_OILCAN_RING=4096', '-DMFE_OILCAN_LITE=1' | ForEach-Object { $argv.Add($_) } }
     $argv.Add('-o'); $argv.Add($out)
     $targets[$out] + $dsp + $lm | ForEach-Object { $argv.Add($_) }
@@ -32,6 +34,7 @@ foreach ($out in $targets.Keys) {
 & .\build\test_dsp.exe; if ($LASTEXITCODE) { throw 'engine tests failed' }
 & .\build\test_dsp_small.exe; if ($LASTEXITCODE) { throw 'engine tests (small effect sizes) failed' }
 & .\build\test_seq.exe; if ($LASTEXITCODE) { throw 'sequencer tests failed' }
+& .\build\test_orbit.exe; if ($LASTEXITCODE) { throw 'ORBIT core tests failed' }
 & python -I tests/fixtures/make_fixtures.py | Out-Null
 & python -I tests/run_py_tests.py; if ($LASTEXITCODE) { throw 'converter tests failed' }
 & python -I tests/test_massive_mods.py; if ($LASTEXITCODE) { throw 'modulation decoder tests failed' }

@@ -1,9 +1,11 @@
-# Vintage Chonk VST3 (Windows)
+# Vintage Chonk VST3 and standalone (Windows)
 
-The Vintage Chonk synth as a VST3 instrument for any Windows DAW: the `dsp/` engine (16 voices, desktop effect
-sizes) and the web panel (the same files as the Android tablet app) in a WebView2 window. Product "Vintage
-Chonk", vendor "Coley", version 1.0.0, VST3 category Instrument|Synth, MIDI in, stereo out (mono offered), no
-audio in.
+The Vintage Chonk synth as a VST3 instrument for any Windows DAW and as a standalone app: the `dsp/` engine
+(16 voices, desktop effect sizes) and the web panel (the same files as the Android tablet app) in a WebView2
+window, plus the second engine ORBIT (poly-convolution, `dsp/orbit/`, its own panel `web/orbit/`). Product
+"Vintage Chonk", vendor "Coley", version 1.1.0, VST3 category Instrument|Synth, MIDI in, stereo out (mono
+offered), no audio in. The build makes `plugin\dist\Vintage Chonk.vst3` and `plugin\dist\Vintage Chonk.exe`
+(JUCE standalone wrapper: Options -> Audio/MIDI Settings).
 
 ## Build
 
@@ -12,6 +14,7 @@ powershell -ExecutionPolicy Bypass -File plugin\fetch_deps.ps1              # JU
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1                   # -> plugin\dist\Vintage Chonk.vst3
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test             # + host test (opens the editor ~10 s)
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test -NoScreenshot   # host test without a window
+powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Dev -Test        # development build -> plugin\dist-dev
 node plugin\tests\test_panel_desktop.mjs                                     # panel + desktop bridge in headless Chrome
 powershell -ExecutionPolicy Bypass -File plugin\fetch_deps.ps1 -Validator   # Steinberg's validator.exe (VST3 SDK)
 ```
@@ -92,6 +95,70 @@ wheel (shift/ctrl = fine), double-click = default; the on-screen keyboard and wh
 Computer keyboard: A W S E D F T G Y H U J K O L P = C4 to D#5, Z / X = octave. The window resizes with the
 panel's 16:10 shape (default 1440 x 900, 720 x 450 to 3840 x 2400). IMPORT .NMSV opens a Windows file dialog.
 The tablet-only "hold the title for Android settings" does nothing here.
+
+## ORBIT mode (1.1.0)
+
+The second engine, the poly-convolution ORBIT (`docs/ORBIT_MODE.md`, core `dsp/orbit/`, API `dsp/include/mfo.h`).
+Development builds: `plugin\build.ps1 -Dev [-Test]` builds into `plugin\build-dev` and copies the bundle to
+`plugin\dist-dev\Vintage Chonk.vst3` (the release `plugin\dist` is untouched).
+
+| Part | File |
+|---|---|
+| Mode switch, cross-fade, latency, ORBIT state / panel ops | `src/PluginProcessor.*` |
+| Engine host: worker-built assets, mailboxes + retire ring, MIDI-split render, EXT/macro feeds, drawn path, tape age | `src/OrbitRunner.*`, `src/TripleBuffer.h` |
+| Settings, 42 host parameters, JSON / XML state with embedded audio, decoding, root key (YIN), factory + user presets | `src/OrbitModel.*` |
+| The Vintage Chonk effects at 44.1 kHz on the host-rate ORBIT bus | `src/FxChain.*` |
+| The panel (direction B "Streamline Lounge") | `web/orbit/orbit.html`, `orbit.css`, `orbit.js` |
+| Preset level / render tool (development) | `tools/orbit_tool.cpp` (target `VintageChonkOrbitTool`) |
+
+* **Mode** CHONK | ORBIT: the switch in either panel's header (CHONK panel: the foot bar, added by the desktop
+  shim). Saved in the state (`mode` attribute). Switching cross-fades the engines (30 ms, equal power) and
+  reports the new latency to the host. CHONK is the 1.0.0 engine, unchanged (tested bit-identical after a trip
+  through ORBIT). The ORBIT engine is created the first time it is wanted.
+* **Engine** at the host rate, 3 layers x 16 voices (synth layers: MFE_MAX_VOICES 16, as the tablet). Sources,
+  impulses, synth prints, shaped IRs, BODY kernels and keytrack sets are built on a worker thread, handed over
+  between render calls, and freed on the worker after the audio thread has let go. Keytrack sets (C2-C7, 1 s)
+  are built only while a sample layer's KEYTRACK is on. Render calls split at MIDI offsets and keep to the
+  core's 64-sample grid (block sizes on that grid render identically). Host tempo and transport feed the core,
+  the effects and the modulation sources: MACRO1-4 (host parameters), mod wheel, aftertouch, and EXT1 1-bar
+  sine, EXT2 16th-note accent stepper, EXT3 S&H per 8th, EXT4 pitch bend, EXT5 sustain, EXT6 note envelope,
+  EXT7 beat ramp, EXT8 slow random walk. Sustain pedal held in the host.
+* **Effects.** mfe_fx is Q15 at 44.1 kHz with every time constant fixed to that rate, so it is not rate-agnostic:
+  it runs at 44.1 kHz between two Kaiser windowed-sinc resamplers in 16-frame blocks. Its delay is exact and
+  reported: 16 samples at 44.1 kHz, 91 at 48 kHz, 179 at 96 kHz (about 1.9 ms). With every effect off the bus
+  only passes the resamplers (float, no clipping). **Latency in ORBIT mode** = core STFT 256 + effects:
+  347 samples at 48 kHz (7.2 ms).
+* **Host parameters** (42, named "ORBIT ..."): puck X / Y, rate, wobble, spread, drift, tape age, output; per layer
+  level, BODY, TONE, GRAIN, MOTION, PITCH, cutoff, resonance; the six effect amounts; macros 1-4. Every one of
+  the 150 core parameters, the 32-slot mod matrix, path / drawn loop, effect switches and macro names are in the
+  state.
+* **Samples**: WAV / AIFF / FLAC through JUCE's AudioFormatManager (up to 120 s), root key detected by YIN on the
+  steady part (editable). In the state by path **and** embedded (FLAC 24-bit, or WAV for odd rates) up to
+  24 MB each; bigger files are kept by path only. Reopening: embedded audio first, then the path; if neither,
+  the layer shows MISSING and the rest plays. Files dropped on the panel are read in the page, sent in chunks
+  and kept in `%APPDATA%\Vintage Chonk\samples` (so they also have a path); LOAD FILE opens a Windows dialog.
+* **Presets**: 8 factory presets (only generated impulses and Chonk presets as synths or prints); user presets
+  `%APPDATA%\Vintage Chonk\orbit\*.orbit` (XML, samples embedded within the cap). Host programs: 0-15 the 16
+  CHONK factory presets (as in 1.0.0), 16-23 the ORBIT ones as "ORBIT - <name>"; choosing one switches the mode
+  (the state keeps the CHONK program in `program`, as 1.0.0, and the ORBIT one in `orbitProgram`; a 1.0.0 state
+  loads as CHONK, unchanged: tested with a real 1.0.0 state, `tests/fixtures/state_1.0.0_program7_macro2.bin`).
+  Levels: each preset's output is set (with `tools/orbit_tool.cpp`) to about -19 dBFS RMS on its demo score,
+  peaks at or below -1.5 dBFS also on a plain C chord (SPRING RAIN, peak-limited, about -23.5 dBFS RMS).
+  Renders: `examples/orbit/presets/*.wav` (written by the host test, through the VST3, not normalised).
+
+## Tests (20 Nov 2026, 1.1.0 development build)
+
+* `VintageChonkHostTest`: 113 passed, 0 failed (the 1.0.0 checks, version now 1.1.0, plus ORBIT: the effects
+  wrapper is an exact reported delay with everything off at 44.1 / 48 / 96 kHz and rings with everything on;
+  core + effects latency; no allocation on the ORBIT audio thread across MIDI, panel notes and an impulse swap;
+  block sizes on the 64 grid bit-identical, 1000 within 91 dB; CPU; YIN root key; 42 host parameters; mode switch
+  through the state with the latency reported (104 -> 347 -> 104 at 48 kHz); CHONK after ORBIT bit-identical to
+  a fresh instance; click-free cross-fade; state round trip with an embedded sample after the file is deleted;
+  the missing-sample fallback; ORBIT cutoff / output / puck automation; 8 factory presets through the VST3 and
+  their WAVs; the ORBIT editor in the running plugin, `build-dev/test_out/editor_orbit_1440x900.png`).
+* `test_panel_desktop.mjs`: 48 passed, 0 failed (24 CHONK + 24 ORBIT panel checks with real mouse / keyboard).
+* Steinberg validator on `plugin/dist-dev/Vintage Chonk.vst3`: 47 passed, 0 failed (`plugin/validator_log_dev_orbit.txt`).
+* CPU, 48 kHz / 256, three layers, five-note chords, effects on: 8.6-11.2 % of one core (11.4 % through the VST3).
 
 ## Tests (18 Nov 2026, release 1.0.0)
 

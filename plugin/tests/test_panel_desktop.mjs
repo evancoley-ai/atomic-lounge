@@ -6,6 +6,8 @@
 //     entry goes out as 'ui'; host pushes (MFHost.patch / restore) land on the panel without an echo;
 //     computer-keyboard notes; save / delete keep the local list.
 //   * mouse: drag, ctrl-drag (fine), wheel, shift-wheel (fine), double-click = default, the keyboard.
+//   * the ORBIT panel (plugin/web/orbit): state from the plugin, sliders, knobs, the orbit field (puck, nodes,
+//     paths, drawing), effects, macro assign, inspectors, presets, host pushes, a dropped file, a screenshot.
 //   node plugin/tests/test_panel_desktop.mjs
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -177,5 +179,239 @@ try {
 } catch (e) {
   check(false, `desktop panel test: ${e.message}`);
 } finally { proc.kill(); }
+// ================================================================================ the ORBIT panel ===
+// plugin/web/orbit/orbit.html in headless Chrome with a fake JUCE backend (as the plugin's WebView2 sees it):
+// the state the plugin pushes (a fixture the host test writes from the real model: build*/test_out/
+// orbit_panel_state.json, else plugin/tests/orbit_panel_state.json), then real mouse / keyboard input, and the
+// events that go back to the plugin.
+async function orbitPanel() {
+  const cands = ['plugin/build-dev/test_out/orbit_panel_state.json', 'plugin/build/test_out/orbit_panel_state.json', 'plugin/tests/orbit_panel_state.json']
+    .map((p) => path.join(ROOT, p)).filter((p) => fs.existsSync(p))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);   // the newest host test run's fixture
+  if (!cands.length) { check(false, 'ORBIT panel: no state fixture (run the host test first)'); return; }
+  const fixture = JSON.parse(fs.readFileSync(cands[0], 'utf8'));
+  const prof2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mfm1-orbit-'));
+  const proc2 = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${prof2}`, '--no-first-run',
+    '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1', 'about:blank'], { stdio: 'ignore' });
+  try {
+    let port = null;
+    for (let i = 0; i < 100 && !port; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      try { port = fs.readFileSync(path.join(prof2, 'DevToolsActivePort'), 'utf8').split('\n')[0].trim(); } catch (e) { /* not yet */ }
+    }
+    if (!port) throw new Error('Chrome did not start');
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+    const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
+    await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+    let id = 0; const pending = new Map(); const errors = [];
+    ws.onmessage = (m) => {
+      const msg = JSON.parse(m.data);
+      if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+      if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
+    };
+    const send = (method, params) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params: params || {} })); });
+    const ev = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.result.exceptionDetails) errors.push(r.result.exceptionDetails.exception?.description); return r.result.result.value; };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    await send('Runtime.enable'); await send('Page.enable');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+    // the plugin answers 'o.hello' with ORB.state (PluginEditor::pushOrbitState)
+    const fakeJuce = `window.__JUCE__ = { backend: { emitEvent(id, o) { (window.__sent = window.__sent || []).push({ id, o: JSON.parse(JSON.stringify(o)) });
+      if (o.op === 'o.hello') setTimeout(() => window.ORB && ORB.state(window.__FIX), 30); } } }; window.__FIX = ${JSON.stringify(fixture)};`;
+    const shim = fs.readFileSync(path.join(ROOT, 'plugin/web/desktop_shim.js'), 'utf8');
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `${fakeJuce}\nwindow.MFHostInit = {};\n${shim}` });
+    await send('Page.navigate', { url: pathToFileURL(path.join(ROOT, 'plugin/web/orbit/orbit.html')).href });
+    for (let i = 0; i < 50 && !(await ev('document.documentElement.dataset.ready === "1"')); i++) await sleep(100);
+
+    const ops = async () => JSON.parse(await ev('JSON.stringify((window.__sent || []).map((s) => s.o))'));
+    const clear = () => ev('window.__sent = []');
+    const S = fixture.settings, H = fixture.host;
+    const hidx = (id) => H.findIndex((h) => h.id === id);
+    const LP = (l, p) => 24 + l * 42 + p;
+    const boot = JSON.parse(await ev(`JSON.stringify({ sent: window.__sent.map((s) => s.o.op), name: document.querySelectorAll('.vfd')[0].textContent,
+      src: [...document.querySelectorAll('.card .lbl.clk')].map((e) => e.textContent).slice(0, 2), paths: [...document.querySelectorAll('.win.wave svg path')].filter((p) => (p.getAttribute('d') || '').length > 50).length,
+      nix: document.querySelectorAll('.nix').length })`));
+    check(boot.sent[0] === 'o.hello', `the ORBIT page says hello to the plugin (${boot.sent.join(',')})`);
+    check(boot.name === S.preset.name.toUpperCase(), `shows the plugin's preset (${boot.name})`);
+    check(boot.paths >= 5, `waveform windows draw the loaded sources / impulses (${boot.paths} of 6 drawn)`);
+    check(!boot.sent.includes('o.host') && !boot.sent.includes('o.set'), 'boot sends no edits back');
+
+    const mouse = (type, x, y, o = {}) => send('Input.dispatchMouseEvent', { type, x, y, button: o.button || (type === 'mouseMoved' ? 'none' : 'left'), buttons: o.buttons ?? (type === 'mousePressed' || (type === 'mouseMoved' && o.down) ? 1 : 0), clickCount: o.clickCount || 1, modifiers: o.modifiers || 0, deltaX: o.deltaX || 0, deltaY: o.deltaY || 0 });
+    const center = async (expr) => JSON.parse(await ev(`(() => { const el = (${expr}); if (!el) return JSON.stringify([-1, -1]); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(); return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); })()`));
+    const drag = async (x, y, dx, dy, steps = 8, mods = 0) => { await mouse('mousePressed', x, y, { modifiers: mods }); for (let i = 1; i <= steps; i++) await mouse('mouseMoved', x + dx * i / steps, y + dy * i / steps, { down: true, modifiers: mods }); await mouse('mouseReleased', x + dx, y + dy, { modifiers: mods }); };
+    const click = async (x, y) => { await mouse('mousePressed', x, y); await mouse('mouseReleased', x, y); };
+
+    // matrix slider: layer 1 TONE up
+    await clear();
+    const [sx, sy] = await center(`document.querySelectorAll('.card')[0].querySelectorAll('.slot')[1]`);
+    await drag(sx, sy, 0, -30);
+    let o = await ops();
+    const tone = o.filter((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_l1_tone'));
+    check(tone.length > 2 && tone[tone.length - 1].a[1] > fixture.hostValues[hidx('orbit_l1_tone')], `matrix slider drag sends L1 TONE up (${tone.length} sends, ${fixture.hostValues[hidx('orbit_l1_tone')].toFixed(2)} -> ${tone.length ? tone[tone.length - 1].a[1].toFixed(2) : '-'})`);
+    const nixT = await ev(`document.querySelectorAll('.card')[0].querySelectorAll('.nix.sm')[1].textContent`);
+    check(nixT === String(Math.round(tone[tone.length - 1].a[1] * 100)).padStart(2, '0').slice(-2), `its nixie reads the value (${nixT})`);
+    // cutoff knob: drag, ctrl-drag (fine), wheel, double-click (default)
+    await clear();
+    const [kx, ky] = await center(`document.querySelectorAll('.card')[1].querySelectorAll('svg.k')[1]`);
+    await drag(kx, ky, 0, -40);
+    const c1 = (await ops()).filter((x) => x.op === 'o.host').map((x) => x.a[1]);
+    await clear();
+    await drag(kx, ky, 0, -40, 8, 2);
+    const c2 = (await ops()).filter((x) => x.op === 'o.host').map((x) => x.a[1]);
+    await clear();
+    await mouse('mouseWheel', kx, ky, { deltaY: 100 });
+    const c3 = (await ops()).filter((x) => x.op === 'o.host').map((x) => x.a[1]);
+    const d1 = c1[c1.length - 1] - fixture.hostValues[hidx('orbit_l2_cutoff')], d2 = c2[c2.length - 1] - c1[c1.length - 1];
+    check(c1.length && d1 > 0.1 && d2 > 0 && d2 < 0.3 * d1 && c3.length === 1 && c3[0] < c2[c2.length - 1],
+      `L2 cutoff knob: drag ${d1.toFixed(3)}, ctrl-drag fine ${d2.toFixed(3)}, wheel down ${c3[0] && c3[0].toFixed(3)}`);
+    const cutTxt = await ev(`document.querySelectorAll('.card')[1].querySelectorAll('.sub.c')[1].textContent`);
+    check(/Hz/.test(cutTxt), `cutoff readout ${cutTxt}`);
+    // orbit field: HOLD, click the field -> the puck goes there
+    await clear();
+    const [hx, hy] = await center(`[...document.querySelectorAll('.pill.or b')][0]`);
+    await click(hx, hy);
+    const [fx, fy] = await center(`document.getElementById('field')`);
+    await drag(fx - 60, fy - 40, 20, 10, 4);
+    o = await ops();
+    const px = o.filter((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_puck_x')), py = o.filter((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_puck_y'));
+    check(o.some((x) => x.op === 'o.path' && x.a[0] === 0) && px.length && py.length && px[px.length - 1].a[1] < 0.5 && py[py.length - 1].a[1] > 0.5,
+      `HOLD + drag on the field moves the puck (x ${px.length && px[px.length - 1].a[1].toFixed(2)}, y ${py.length && py[py.length - 1].a[1].toFixed(2)})`);
+    // drag node 2
+    await clear();
+    const [nx, ny] = await center(`document.querySelectorAll('#field .node')[1]`);
+    await drag(nx, ny, -25, 20, 5);
+    o = await ops();
+    check(o.some((x) => x.op === 'o.set' && x.a[0] === 4) && o.some((x) => x.op === 'o.set' && x.a[0] === 5), 'dragging node 2 moves NODE2 X / Y');
+    // CIRCLE, then DRAWN + a hand-drawn loop
+    await clear();
+    const pills = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.pill.or b')].map((b) => { const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }))`));
+    await click(...pills[1]);
+    const circ = await ev(`document.querySelector('#field path').getAttribute('d').length`);
+    await click(...pills[3]);
+    await ev(`window.ORB.state(Object.assign({}, window.__FIX, { settings: Object.assign({}, window.ORB._debug().S, { drawn: [] , path: 3 }) }))`);
+    await clear();
+    await mouse('mousePressed', fx + 60, fy);
+    for (let k = 1; k <= 36; k++) { const t = k / 36 * 2 * Math.PI; await mouse('mouseMoved', fx + 60 * Math.cos(t), fy + 40 * Math.sin(t), { down: true }); }
+    await mouse('mouseReleased', fx + 60, fy);
+    o = await ops();
+    const drawn = o.find((x) => x.op === 'o.drawn');
+    check(circ > 200 && drawn && drawn.a[0].length >= 8 && drawn.a[0].length <= 64, `CIRCLE draws its path; DRAWN + a hand-drawn loop sends o.drawn (${drawn ? drawn.a[0].length : 0} points)`);
+    // sync, direction, rate text
+    await clear();
+    const syncB = await center(`[...document.querySelectorAll('.pill')].find((p) => p.textContent.includes('FREE')).children[1]`);
+    await click(...syncB);
+    const rateTxt = await ev(`[...document.querySelectorAll('.card')][3].querySelectorAll('.sub.c')[0].textContent`);
+    o = await ops();
+    check(o.some((x) => x.op === 'o.sync' && x.a[0] === false) && /Hz|s$/.test(rateTxt), `SYNC FREE sends o.sync, the rate reads in time (${rateTxt})`);
+    // effects: jewel on/off, ensemble mode
+    await clear();
+    const j0 = await center(`document.querySelectorAll('.cup .jewel')[0]`);
+    await click(...j0);
+    const e2 = await center(`document.querySelectorAll('.cup .lbl')[2]`);
+    await click(...e2);
+    o = await ops();
+    check(o.some((x) => x.op === 'o.fx' && x.a[0] === 0 && x.a[1] === !S.fx.on[0]) && o.some((x) => x.op === 'o.fxopt' && x.a[0].ens),
+      `effects: OCT FUZZ on/off, ENSEMBLE mode (${o.map((x) => x.op).join(',')})`);
+    // macro assign: click macro 2's number, then the L3 GRAIN slider
+    await clear();
+    const m2 = await center(`document.querySelectorAll('.nix.sm.clk')[1]`);
+    await click(...m2);
+    const bar = await ev(`!document.getElementById('assignBar').classList.contains('hidden')`);
+    const [gx, gy] = await center(`document.querySelectorAll('.card')[2].querySelectorAll('.slot')[2]`);
+    await click(gx, gy);
+    o = await ops();
+    const asg = o.find((x) => x.op === 'o.assign');
+    check(bar && asg && asg.a[0] === 2 && asg.a[1] === LP(2, 4), `macro assign: macro 2 then L3 GRAIN -> o.assign ${asg ? JSON.stringify(asg.a) : '-'}`);
+    check(!o.some((x) => x.op === 'o.host'), 'the click that assigns does not move the slider');
+    // source: SYNTH inspector, pick a Chonk preset
+    await clear();
+    const srcS = await center(`document.querySelectorAll('.card')[0].querySelectorAll('.pill')[0].children[1]`);
+    await click(...srcS);
+    const insp = await ev(`!!document.getElementById('insp') && !document.getElementById('insp').classList.contains('hidden')`);
+    const item = await center(`[...document.querySelectorAll('#insp .list div')].find((d) => d.textContent.includes('SILK STRINGS'))`);
+    await click(...item);
+    o = await ops();
+    check(insp && o.some((x) => x.op === 'o.src' && x.a[0] === 0 && x.a[1].patch && x.a[1].patch.name === 'Silk Strings'),
+      `source inspector: a Chonk preset as the synth source (${o.map((x) => x.op + (x.a[1] && x.a[1].patch ? ':' + x.a[1].patch.name : '')).join(',')})`);
+    // impulse: factory impulse list
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await clear();
+    const impW = await center(`document.querySelectorAll('.card')[1].querySelectorAll('.win.wave')[1]`);
+    await click(...impW);
+    const fac = await center(`[...document.querySelectorAll('#insp .btn')].find((b) => b.textContent === 'FACTORY')`);
+    await click(...fac);
+    const gl = await center(`[...document.querySelectorAll('#insp .list div')].find((d) => d.textContent.includes('PLATE'))`);
+    await click(...gl);
+    o = await ops();
+    check(o.some((x) => x.op === 'o.imp' && x.a[0] === 1 && x.a[1].gen === 1), `impulse inspector: factory impulse PLATE for layer 2 (${o.map((x) => x.op).join(',')})`);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    // filter type menu
+    await clear();
+    const ft = await center(`document.querySelectorAll('.card')[0].querySelector('.abs.clk')`);
+    await click(...ft);
+    const band = await center(`[...document.querySelectorAll('#fmenu .list div')].find((d) => d.textContent === 'SVF BAND')`);
+    await click(...band);
+    o = await ops();
+    check(o.some((x) => x.op === 'o.set' && x.a[0] === LP(0, 14) && x.a[1] === 3), 'filter type menu: SVF BAND on layer 1');
+    // presets: browse + load factory 3, save
+    await clear();
+    const br = await center(`[...document.querySelectorAll('.hbtn')].find((b) => b.textContent === 'BROWSE')`);
+    await click(...br);
+    const f3 = await center(`document.querySelector('#browse .list div:nth-child(3)')`);
+    await click(...f3);
+    const sv = await center(`[...document.querySelectorAll('.hbtn')].find((b) => b.textContent === 'SAVE')`);
+    await click(...sv);
+    await sleep(50);
+    await ev(`document.querySelector('#save input').value = 'MY ORBIT'`);
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter' });
+    o = await ops();
+    check(o.some((x) => x.op === 'o.preset' && x.a[0] === 'F' && x.a[1] === 2) && o.some((x) => x.op === 'o.save' && x.a[0] === 'MY ORBIT'), `browse loads factory 3, save sends the name (${o.map((x) => x.op).join(',')})`);
+    // the plugin pushes automation and meters: the panel follows, no echo
+    await clear();
+    const ti = hidx('orbit_l1_body');
+    await ev(`ORB.values({ ${ti}: 0.13 }); ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [0.38, 0.61], w: [0.42, 0.18, 0.31, 0.09], vu: [0.2, 0.2], pk: [0.5, 0.5], midi: 3 })`);
+    await sleep(50);
+    const st = JSON.parse(await ev(`JSON.stringify({ nix: document.querySelectorAll('.card')[0].querySelectorAll('.nix.sm')[0].textContent,
+      puck: document.querySelector('#field .puck').getAttribute('transform'), stat: document.querySelector('.abs[style*="1288px"]').textContent,
+      blend: [...document.querySelectorAll('.card')[3].querySelectorAll('.nix:not(.sm)')].map((n) => n.textContent).join(' ') })`));
+    o = await ops();
+    check(st.nix === '13' && o.length === 0, `host automation lands on the panel, no echo (L1 BODY nixie ${st.nix}, ${o.length} sends)`);
+    check(/translate/.test(st.puck) && /VOICES 06\/48/.test(st.stat) && /CPU 11/.test(st.stat) && st.blend === '42 18 31 _9'.replace('_', '0'),
+      `meters: puck ${st.puck}, status "${st.stat}", blend ${st.blend}`);
+    // drop a file on layer 3's source window: read in the page, sent in chunks
+    await clear();
+    await ev(`(() => { const w = document.querySelectorAll('.card')[2].querySelectorAll('.win.wave')[0]; const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(700000).fill(7)], 'Rain Stick.wav', { type: 'audio/wav' }));
+      w.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+    await sleep(400);
+    o = await ops();
+    const chunks = o.filter((x) => x.op === 'o.dropChunk');
+    const bytes = chunks.reduce((a, x) => a + Buffer.from(x.a[0], 'base64').length, 0);
+    check(o[0] && o[0].op === 'o.dropBegin' && o[0].a[0] === 2 && o[0].a[1] === 'src' && bytes === 700000 && o[o.length - 1].op === 'o.dropEnd',
+      `a dropped WAV goes to the plugin (${chunks.length} chunks, ${bytes} bytes)`);
+    // the computer keyboard plays ORBIT too (desktop shim), and CHONK mode is one click
+    await clear();
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' });
+    const ch = await center(`document.querySelector('.modeb.off')`);
+    await click(...ch);
+    o = await ops();
+    check(o.some((x) => x.op === 'midi' && x.a[0] === 0x90 && x.a[1] === 60) && o.some((x) => x.op === 'o.mode' && x.a[0] === 'chonk'), `computer keyboard notes and the CHONK switch (${o.map((x) => x.op).join(',')})`);
+    // a clean screenshot of the panel as the plugin shows it (state as pushed, a chord's meters)
+    await send('Page.navigate', { url: pathToFileURL(path.join(ROOT, 'plugin/web/orbit/orbit.html')).href });
+    for (let i = 0; i < 50 && !(await ev('document.documentElement.dataset.ready === "1"')); i++) await sleep(100);
+    await ev(`ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [0.38, 0.61], w: [0.42, 0.18, 0.31, 0.09], vu: [0.12, 0.12], pk: [0.4, 0.4], midi: 3 }); document.getElementById('toast').classList.add('hidden')`);
+    for (let k = 0; k < 40; k++) { const t = 4.2 + k * 0.012; await ev(`ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [${(0.05 + 0.55 * Math.cos(t)).toFixed(3)}, ${(-0.05 + 0.5 * Math.sin(t)).toFixed(3)}], w: [0.42, 0.18, 0.31, 0.09], vu: [0.12, 0.12], pk: [0.4, 0.4], midi: 3 })`); }
+    await sleep(150);
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    const out = cands[0].includes('test_out') ? path.dirname(cands[0]) : path.join(ROOT, 'plugin/build/test_out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'orbit_panel_chrome.png'), Buffer.from(shot.result.data, 'base64'));
+    check(errors.length === 0, `ORBIT panel: no page errors (${errors.slice(0, 3).join(' / ')})`);
+    ws.close();
+  } catch (e) {
+    check(false, `ORBIT panel test: ${e.message}`);
+  } finally { proc2.kill(); }
+}
+await orbitPanel();
 console.log(`desktop panel: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

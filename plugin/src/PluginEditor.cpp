@@ -23,12 +23,12 @@ VintageChonkEditor::VintageChonkEditor (VintageChonkProcessor& p)
 {
     addAndMakeVisible (browser);
     seenRestore = proc.restoreSerial();
-    // the panel is drawn for 1920 x 1200 and scales to fit: keep that shape
+    // both panels are drawn for 16:10 (1920 x 1200 and 1600 x 1000) and scale to fit: keep that shape
     setResizable (true, true);
     setResizeLimits (720, 450, 3840, 2400);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio (1920.0 / 1200.0);
     setSize (1440, 900);
-    browser.goToURL (juce::WebBrowserComponent::getResourceProviderRoot());
+    showMode();
     startTimerHz (30);
 }
 
@@ -36,6 +36,14 @@ VintageChonkEditor::~VintageChonkEditor() { stopTimer(); }
 
 void VintageChonkEditor::paint (juce::Graphics& g) { g.fillAll (juce::Colour (0xff141312)); }
 void VintageChonkEditor::resized() { browser.setBounds (getLocalBounds()); }
+
+void VintageChonkEditor::showMode()
+{
+    seenMode = proc.modeSerial();
+    orbitPage = false;
+    const auto root = juce::WebBrowserComponent::getResourceProviderRoot();
+    browser.goToURL (proc.mode() == VintageChonkProcessor::orbitMode ? root + "orbit.html" : root);
+}
 
 juce::WebBrowserComponent::Options VintageChonkEditor::options()
 {
@@ -92,8 +100,36 @@ void VintageChonkEditor::pushPresets()
     js ("window.MFHost && MFHost.presets(" + json (mfm1::PresetStore::list()) + ")");
 }
 
+void VintageChonkEditor::pushOrbitState()
+{
+    seenOrbitRestore = proc.orbitRestoreSerial();
+    seenViews = proc.orbitViewSerial();
+    sentHost.clear();
+    proc.orbitHostChanges (sentHost);      // what the state carries is what the panel has
+    js ("window.ORB && ORB.state(" + json (proc.orbitState()) + ")");
+}
+
 void VintageChonkEditor::timerCallback()
 {
+    if (proc.modeSerial() != seenMode) { showMode(); return; }
+    if (orbitPage)
+    {
+        if (proc.orbitRestoreSerial() != seenOrbitRestore) pushOrbitState();
+        else
+        {
+            const auto ch = proc.orbitHostChanges (sentHost);
+            if (! ch.isVoid()) js ("window.ORB && ORB.values(" + json (ch) + ")");
+            if (proc.orbitViewSerial() != seenViews)
+            {
+                seenViews = proc.orbitViewSerial();
+                juce::Array<juce::var> v;
+                for (int l = 0; l < orbit::layers; l++) v.add (proc.orbitView (l));
+                js ("window.ORB && ORB.views(" + json (v) + ")");
+            }
+        }
+        js ("window.ORB && ORB.meter(" + json (proc.orbitMeter()) + ")");
+        return;
+    }
     if (proc.restoreSerial() != seenRestore)
     {
         seenRestore = proc.restoreSerial();
@@ -113,6 +149,11 @@ void VintageChonkEditor::onPanelEvent (const juce::var& v)
     const auto op = v["op"].toString();
     const auto* a = v["a"].getArray();
     auto arg = [a] (int i) { return a != nullptr && i < a->size() ? (*a)[i] : juce::var(); };
+    if (op.startsWith ("o."))
+    {
+        onOrbitEvent (op, a != nullptr ? *a : juce::Array<juce::var>());
+        return;
+    }
     if (op == "patch")
     {
         const auto res = proc.panelPatch (arg (0).toString(), (int) arg (1));
@@ -137,11 +178,66 @@ void VintageChonkEditor::onPanelEvent (const juce::var& v)
         pushPresets();
     }
     else if (op == "pick") pickNmsv();
+    else if (op == "mode") proc.setMode (arg (0).toString() == "orbit" ? VintageChonkProcessor::orbitMode : VintageChonkProcessor::chonk);
     else if (op == "hello")
     {
+        orbitPage = false;
         pushPresets();
         pushRestore();
     }
+}
+
+void VintageChonkEditor::onOrbitEvent (const juce::String& op, const juce::Array<juce::var>& a)
+{
+    auto arg = [&a] (int i) { return i < a.size() ? a[i] : juce::var(); };
+    if (op == "o.hello")
+    {
+        orbitPage = true;
+        pushOrbitState();
+        return;
+    }
+    if (op == "o.pick") { pickSample ((int) arg (0), arg (1).toString() == "imp"); return; }
+    if (op == "o.dropBegin")
+    {
+        drop.reset();
+        dropName = arg (2).toString();
+        dropLayer = (int) arg (0);
+        dropImpulse = arg (1).toString() == "imp";
+        return;
+    }
+    if (op == "o.dropChunk")
+    {
+        juce::MemoryOutputStream mo (drop, true);
+        if (drop.getSize() < (size_t) (256 << 20)) juce::Base64::convertFromBase64 (mo, arg (0).toString());
+        return;
+    }
+    if (op == "o.dropEnd")
+    {
+        const auto res = proc.loadSampleBytes (dropLayer, dropImpulse, dropName, drop);
+        drop.reset();
+        if (! res.startsWith ("ok")) js ("window.ORB && ORB.toast(" + quoted ("Not loaded: " + res) + ")");
+        else if (res.length() > 2) js ("window.ORB && ORB.toast(" + quoted (dropName + res.substring (2)) + ")");
+        return;
+    }
+    const auto r = proc.orbitOp (op, a);
+    if (r.isString() && r.toString().isNotEmpty()) js ("window.ORB && ORB.toast(" + quoted (r.toString()) + ")");
+}
+
+void VintageChonkEditor::pickSample (int layer, bool impulse)
+{
+    chooser = std::make_unique<juce::FileChooser> (impulse ? "Load an impulse (WAV, AIFF, FLAC)" : "Load a sample (WAV, AIFF, FLAC)",
+                                                   juce::File(), "*.wav;*.aif;*.aiff;*.flac");
+    juce::Component::SafePointer<VintageChonkEditor> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe, layer, impulse] (const juce::FileChooser& fc)
+                          {
+                              if (safe == nullptr) return;
+                              const auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              const auto res = safe->proc.loadSampleFile (layer, impulse, f);
+                              if (! res.startsWith ("ok")) safe->js ("window.ORB && ORB.toast(" + quoted ("Not loaded: " + res) + ")");
+                              else if (res.length() > 2) safe->js ("window.ORB && ORB.toast(" + quoted (f.getFileName() + res.substring (2)) + ")");
+                          });
 }
 
 void VintageChonkEditor::pickNmsv()

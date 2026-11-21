@@ -33,6 +33,9 @@
 #include "PresetStore.h"
 #include "Params.h"
 #include "factory_presets.h"
+#include "FxChain.h"
+#include "OrbitModel.h"
+#include "OrbitRunner.h"
 
 // ------------------------------------------------------------ allocation counter (this thread) ---
 static thread_local bool countAllocs = false;
@@ -238,7 +241,11 @@ static std::unique_ptr<juce::XmlElement> pluginState (juce::AudioPluginInstance&
     juce::MemoryBlock raw;
     raw.fromBase64Encoding (comp->getAllSubText());
     const std::string bytes (static_cast<const char*> (raw.getData()), raw.getSize());   // binary header first
-    const auto a0 = bytes.find ("<VINTAGECHONK"), b0 = a0 == std::string::npos ? a0 : bytes.find ("/>", a0);
+    // the record ends with "/>" (1.0.0, no children) or "</VINTAGECHONK>" (1.1.0: the <ORBIT> child)
+    const auto a0 = bytes.find ("<VINTAGECHONK");
+    auto b0 = a0 == std::string::npos ? a0 : bytes.find ("</VINTAGECHONK>", a0);
+    size_t endLen = 15;
+    if (a0 != std::string::npos && b0 == std::string::npos) { b0 = bytes.find ("/>", a0); endLen = 2; }
     const auto text = juce::String::fromUTF8 (bytes.c_str(), (int) bytes.size());
     const int a = a0 == std::string::npos ? -1 : (int) a0, b = b0 == std::string::npos ? -1 : (int) b0;
     if (a < 0 || b < 0)
@@ -246,7 +253,7 @@ static std::unique_ptr<juce::XmlElement> pluginState (juce::AudioPluginInstance&
         info ("no plugin record in the host state (" + juce::String ((int) raw.getSize()) + " bytes): " + text.substring (0, 120).removeCharacters ("\r\n"));
         return {};
     }
-    return juce::parseXML (juce::String::fromUTF8 (bytes.c_str() + a, b + 2 - a));
+    return juce::parseXML (juce::String::fromUTF8 (bytes.c_str() + a, b + (int) endLen - a));
 }
 // give the plugin one of its own state records, wrapped the way JUCE's VST3 host stores it
 static void setPluginState (juce::AudioPluginInstance& p, const juce::MemoryBlock& own)
@@ -346,6 +353,170 @@ static int zeroCrossings (const juce::AudioBuffer<float>& b, int from, int to)
     return n;
 }
 
+// ------------------------------------------------------------------------------- ORBIT helpers ---
+// the settings into a runner the way the processor does it (PluginProcessor::orbitApplyAll)
+static void orbitApply (orbit::Runner& r, const orbit::Settings& s)
+{
+    const auto& hp = orbit::hostParams();
+    for (int i = 0; i < (int) hp.size(); i++) r.setHostNorm (i, orbit::hostNormFromSettings (hp[(size_t) i], s));
+    for (int i = 0; i < orbit::numCore; i++) r.setCore (i, s.core[(size_t) i]);
+    r.setPath (s.path, s.sync, s.drawn);
+    r.setFx (s.fxOn, s.ensMode, s.revType, s.bbdSync, s.oilSync);
+    r.setMods (s.mods);
+    for (int l = 0; l < orbit::layers; l++) { r.requestSource (l, s.src[l]); r.requestImpulse (l, s.imp[l]); }
+}
+// a plugin state record (the plugin's own XML) with an ORBIT settings block and a mode
+static juce::MemoryBlock orbitBlob (juce::AudioPluginInstance& p, const orbit::Settings* s, const char* mode)
+{
+    auto x = pluginState (p);
+    juce::MemoryBlock mb;
+    if (x == nullptr) return mb;
+    x->setAttribute ("mode", mode);
+    if (s != nullptr)
+    {
+        if (auto* old = x->getChildByName ("ORBIT")) x->removeChildElement (old, true);
+        x->addChildElement (orbit::toXml (*s).release());
+    }
+    juce::AudioProcessor::copyXmlToBinary (*x, mb);
+    return mb;
+}
+static juce::AudioProcessorParameter* paramByName (juce::AudioPluginInstance& p, const juce::String& name)
+{
+    for (auto* prm : p.getParameters()) if (prm->getName (64) == name) return prm;
+    return nullptr;
+}
+// musical scores for the preset renders (seconds, MIDI)
+static std::vector<Ev> chordScore (std::initializer_list<std::vector<int>> chords, double each, double gap, int vel = 100)
+{
+    std::vector<Ev> e;
+    double t = 0.05;
+    for (const auto& c : chords)
+    {
+        for (int n : c) e.push_back ({ t, { 0x90, (uint8_t) n, (uint8_t) vel } });
+        for (int n : c) e.push_back ({ t + each - gap, { 0x80, (uint8_t) n, 0 } });
+        t += each;
+    }
+    return e;
+}
+static std::vector<Ev> lineScore (std::initializer_list<int> notes, double step, double len, int vel = 100)
+{
+    std::vector<Ev> e;
+    double t = 0.05;
+    int k = 0;
+    for (int n : notes)
+    {
+        e.push_back ({ t, { 0x90, (uint8_t) n, (uint8_t) (vel - (k % 4 ? 20 : 0)) } });
+        e.push_back ({ t + len, { 0x80, (uint8_t) n, 0 } });
+        t += step;
+        k++;
+    }
+    return e;
+}
+static void sortScore (std::vector<Ev>& e) { std::stable_sort (e.begin(), e.end(), [] (const Ev& a, const Ev& b) { return a.t < b.t; }); }
+static bool writeWav (const juce::File& f, const juce::AudioBuffer<float>& b, double fs, float& gainOut)
+{
+    float pk = 0.0f;
+    for (int c = 0; c < b.getNumChannels(); c++) pk = std::max (pk, b.getMagnitude (c, 0, b.getNumSamples()));
+    gainOut = pk > 0.891f ? 0.891f / pk : 1.0f;      // never above -1 dBFS
+    juce::AudioBuffer<float> o (b);
+    o.applyGain (gainOut);
+    f.getParentDirectory().createDirectory();
+    f.deleteFile();
+    std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (f);
+    juce::WavAudioFormat wav;
+    auto w = wav.createWriterFor (os, juce::AudioFormatWriterOptions {}.withSampleRate (fs).withNumChannels (2).withBitsPerSample (24));
+    return w != nullptr && w->writeFromAudioSampleBuffer (o, 0, o.getNumSamples());
+}
+static double maxJump (const juce::AudioBuffer<float>& b, int from, int to)
+{
+    double m = 0;
+    for (int c = 0; c < 2; c++)
+        for (int i = std::max (1, from); i < to; i++) m = std::max (m, (double) std::fabs (b.getSample (c, i) - b.getSample (c, i - 1)));
+    return m;
+}
+
+// what the plugin pushes to the ORBIT panel (PluginProcessor::orbitState), built from the same model and
+// runner for the factory preset 1: the fixture of plugin/tests/test_panel_desktop.mjs
+static juce::var orbitPanelState()
+{
+    const auto s = orbit::factoryPreset (0);
+    orbit::Runner r;
+    r.prepare (48000.0, 256);
+    orbitApply (r, s);
+    r.waitIdle (20000);
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("settings", orbit::toVar (s));
+    juce::Array<juce::var> host, hv;
+    for (const auto& h : orbit::hostParams())
+    {
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("id", h.id);
+        e->setProperty ("name", h.name);
+        e->setProperty ("target", h.target);
+        e->setProperty ("map", h.map == orbit::Map::lin ? "lin" : h.map == orbit::Map::sq2 ? "sq2" : h.map == orbit::Map::log ? "log" : "special");
+        host.add (juce::var (e));
+        hv.add (orbit::hostNormFromSettings (h, s));
+    }
+    o->setProperty ("host", host);
+    o->setProperty ("hostValues", hv);
+    juce::Array<juce::var> core;
+    for (int i = 0; i < orbit::numCore; i++)
+    {
+        const auto* in = mfo_param_info (i);
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("name", juce::String (in->name));
+        e->setProperty ("min", in->min);
+        e->setProperty ("max", in->max);
+        e->setProperty ("def", in->def);
+        e->setProperty ("int", (in->flags & MFO_PF_INT) != 0);
+        e->setProperty ("log", (in->flags & MFO_PF_LOG) != 0);
+        core.add (juce::var (e));
+    }
+    o->setProperty ("core", core);
+    juce::Array<juce::var> chonk;
+    for (int i = 0; i < mfm1_factory::count; i++)
+    {
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("name", juce::String (mfm1_factory::names[i]));
+        e->setProperty ("kind", "F");
+        chonk.add (juce::var (e));
+    }
+    o->setProperty ("chonk", chonk);
+    juce::Array<juce::var> fac, gens, views;
+    for (int i = 0; i < orbit::factoryCount(); i++) fac.add (orbit::factoryName (i));
+    o->setProperty ("factory", fac);
+    o->setProperty ("user", juce::Array<juce::var>());
+    for (int i = 0; i < MFO_GEN_COUNT; i++) gens.add (juce::String (mfo_generate_name (i)));
+    o->setProperty ("gens", gens);
+    auto peaks = [] (const std::vector<float>& p) { juce::Array<juce::var> a; for (float x : p) a.add (std::round (x * 1000.0f) / 1000.0f); return a; };
+    for (int l = 0; l < orbit::layers; l++)
+    {
+        const auto v = r.view (l);
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("layer", l);
+        e->setProperty ("srcName", v.srcName); e->setProperty ("srcSub", v.srcSub); e->setProperty ("srcPeaks", peaks (v.srcPeaks));
+        e->setProperty ("srcTrace", v.srcTrace); e->setProperty ("srcError", v.srcError);
+        e->setProperty ("impName", v.impName); e->setProperty ("impSub", v.impSub); e->setProperty ("impError", v.impError);
+        if (s.imp[l].kind == orbit::Imp::live)
+        {
+            const auto ov = r.view (s.imp[l].liveLayer);
+            e->setProperty ("impPeaks", peaks (ov.srcPeaks));
+            e->setProperty ("impTrace", ov.srcTrace);
+        }
+        else { e->setProperty ("impPeaks", peaks (v.impPeaks)); e->setProperty ("impTrace", false); }
+        views.add (juce::var (e));
+    }
+    o->setProperty ("views", views);
+    o->setProperty ("problems", juce::Array<juce::var>());
+    auto* m = new juce::DynamicObject();
+    m->setProperty ("cpu", 0.11); m->setProperty ("voices", 6); m->setProperty ("rate", 48000.0); m->setProperty ("latencyMs", 7.23);
+    m->setProperty ("puck", juce::Array<juce::var> { 0.38, 0.61 }); m->setProperty ("w", juce::Array<juce::var> { 0.42, 0.18, 0.31, 0.09 });
+    m->setProperty ("vu", juce::Array<juce::var> { 0.1, 0.1 }); m->setProperty ("pk", juce::Array<juce::var> { 0.4, 0.4 }); m->setProperty ("midi", 0);
+    m->setProperty ("mode", "orbit");
+    o->setProperty ("meter", juce::var (m));
+    return juce::var (o);
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -439,7 +610,7 @@ int main (int argc, char** argv)
     const auto desc = *types[0];
     info (desc.name + " by " + desc.manufacturerName + ", " + desc.category + ", version " + desc.version + ", id " + desc.createIdentifierString());
     check (desc.name == "Vintage Chonk" && desc.manufacturerName == "Coley", "name Vintage Chonk, company Coley");
-    check (desc.version == "1.0.0", "version 1.0.0 (" + desc.version + ")");
+    check (desc.version == "1.1.0", "version 1.1.0 (" + desc.version + ")");
     check (desc.isInstrument, "registered as an instrument");
     check (desc.numInputChannels == 0 && desc.numOutputChannels == 2, "no audio in, stereo out (" + juce::String (desc.numInputChannels) + " in / " + juce::String (desc.numOutputChannels) + " out)");
 
@@ -454,8 +625,19 @@ int main (int argc, char** argv)
     check (plug != nullptr, "instantiate");
     if (plug == nullptr) return 1;
     check (plug->acceptsMidi() && ! plug->producesMidi(), "MIDI in, no MIDI out");
-    check (plug->getNumPrograms() == 16, "16 host programs (" + juce::String (plug->getNumPrograms()) + ")");
+    const int nChonk = mfm1_factory::count, nOrbit = orbit::factoryCount();
+    check (plug->getNumPrograms() == nChonk + nOrbit, juce::String (plug->getNumPrograms()) + " host programs (16 CHONK + " + juce::String (nOrbit) + " ORBIT)");
     check (plug->getProgramName (0) == "Walnut Bass" && plug->getProgramName (9) == "Parlour Keys", "program names from the factory bank");
+    {
+        juce::StringArray on;
+        int named = 0;
+        for (int i = 0; i < nOrbit; i++)
+        {
+            on.add (plug->getProgramName (nChonk + i));
+            if (plug->getProgramName (nChonk + i) == "ORBIT - " + orbit::factoryName (i)) named++;
+        }
+        check (named == nOrbit && nOrbit == 8, "ORBIT programs after the CHONK ones: " + on.joinIntoString (", "));
+    }
     int named = 0;
     for (int i = 0; i < mfm1::numParams; i++)
         if (auto* prm = paramById (*plug, mfm1::paramDefs[i].id); prm != nullptr && prm->getName (64) == mfm1::paramDefs[i].name) named++;
@@ -584,7 +766,7 @@ int main (int argc, char** argv)
         auto p = make();
         int sounding = 0;
         juce::StringArray quiet;
-        for (int i = 0; i < p->getNumPrograms(); i++)
+        for (int i = 0; i < mfm1_factory::count; i++)
         {
             p->setCurrentProgram (i);
             const std::vector<Ev> one = { { 0.02, { 0x90, 57, 110 } }, { 0.7, { 0x80, 57, 0 } } };
@@ -592,7 +774,7 @@ int main (int argc, char** argv)
             if (s.finite && s.rms > 0.0005 && s.peak < 2.0) sounding++;
             else quiet.add (p->getProgramName (i) + " " + juce::String (db (s.rms), 1) + " dBFS");
         }
-        check (sounding == p->getNumPrograms(), juce::String (sounding) + " of 16 programs play (finite, sounding, no overload) " + quiet.joinIntoString (", "));
+        check (sounding == mfm1_factory::count, juce::String (sounding) + " of 16 CHONK programs play (finite, sounding, no overload) " + quiet.joinIntoString (", "));
     }
     {
         auto p = make();
@@ -669,17 +851,21 @@ int main (int argc, char** argv)
         const auto pl = vst3ParamList (*plug, juce::File (path));
         info ("edit controller: " + juce::String (pl.total) + " parameters, " + juce::String (pl.visible) + " without kIsHidden ("
               + pl.visibleNames.joinIntoString (", ") + "), " + juce::String (pl.hiddenCc) + " hidden MIDI CC parameters");
-        int ours = 0;
+        int ours = 0, orbitOurs = 0;
         juce::StringArray extra;
         for (const auto& n : pl.visibleNames)
         {
-            bool mine = false;
+            bool mine = false, orb = false;
             for (const auto& d : mfm1::paramDefs) mine = mine || n == juce::String (d.name);
+            for (const auto& h : orbit::hostParams()) orb = orb || n == h.name;
             if (mine) ours++;
+            else if (orb) orbitOurs++;
             else extra.add (n);
         }
-        check (ours == mfm1::numParams && pl.visible <= mfm1::numParams + 2,
-               juce::String (pl.visible) + " visible VST3 parameters: our " + juce::String (ours) + " + [" + extra.joinIntoString (", ") + "]");
+        const int nOrbit = (int) orbit::hostParams().size();
+        check (ours == mfm1::numParams && orbitOurs == nOrbit && pl.visible <= mfm1::numParams + nOrbit + 2,
+               juce::String (pl.visible) + " visible VST3 parameters: CHONK " + juce::String (ours) + " + ORBIT " + juce::String (orbitOurs)
+                   + " + [" + extra.joinIntoString (", ") + "]");
         check (pl.hiddenCc == 16 * 130, juce::String (pl.hiddenCc) + " MIDI CC emulation parameters, all flagged kIsHidden (16 x 130)");
         info ("JUCE's hosted view of the plugin lists " + juce::String (plug->getParameters().size()) + " parameters (host side, flags not applied)");
     }
@@ -735,6 +921,75 @@ int main (int argc, char** argv)
     }
 
     {
+        // a project saved by release 1.0.0 (a real state from the 1.0.0 bundle: program 7, macro 2 at 0.73, no mode,
+        // no ORBIT child) loads as CHONK, unchanged: also into an instance that is in ORBIT mode
+        const auto repoDir = juce::File (path).getParentDirectory().getParentDirectory().getParentDirectory();
+        const auto fx = repoDir.getChildFile ("plugin/tests/fixtures/state_1.0.0_program7_macro2.bin");
+        juce::MemoryBlock v100;
+        const bool have = fx.loadFileAsData (v100);
+        check (have && v100.getSize() > 500, "1.0.0 state fixture " + fx.getFileName() + " (" + juce::String ((int) v100.getSize()) + " bytes)");
+        if (have)
+        {
+            auto a = make();
+            a->setStateInformation (v100.getData(), (int) v100.getSize());
+            auto b = make();
+            b->setCurrentProgram (mfm1_factory::count + 2);
+            auto xb0 = pluginState (*b);
+            const bool bWasOrbit = xb0 != nullptr && xb0->getStringAttribute ("mode") == "orbit";
+            b->setStateInformation (v100.getData(), (int) v100.getSize());
+            auto xa = pluginState (*a), xb = pluginState (*b);
+            auto* m2 = paramById (*a, "macro2");
+            check (xa != nullptr && xa->getStringAttribute ("mode") == "chonk" && a->getCurrentProgram() == 7 && m2 != nullptr
+                       && std::fabs (m2->getValue() - 0.73f) < 0.01f,
+                   "the 1.0.0 state loads as CHONK, program " + juce::String (a->getCurrentProgram()) + " (" + a->getProgramName (a->getCurrentProgram())
+                       + "), macro 2 " + juce::String (m2 ? m2->getValue() : -1.0f, 3));
+            check (bWasOrbit && xb != nullptr && xb->getStringAttribute ("mode") == "chonk" && b->getCurrentProgram() == 7,
+                   "the 1.0.0 state loaded into an instance playing an ORBIT program switches it to CHONK, program " + juce::String (b->getCurrentProgram()));
+            check (xa != nullptr && xb != nullptr && xa->getStringAttribute ("mfp") == xb->getStringAttribute ("mfp")
+                       && xa->getStringAttribute ("ui") == xb->getStringAttribute ("ui"),
+                   "same CHONK sound and panel entry either way: " + (xa ? xa->getStringAttribute ("ui") : juce::String()));
+            auto c = make();
+            c->setCurrentProgram (7);
+            if (auto* cm2 = paramById (*c, "macro2")) cm2->setValueNotifyingHost (m2 != nullptr ? m2->getValue() : 0.73f);
+            const auto ra = renderPlugin (*a, 48000.0, 256, 1.5, evs), rb = renderPlugin (*b, 48000.0, 256, 1.5, evs),
+                       rc = renderPlugin (*c, 48000.0, 256, 1.5, evs);
+            check (maxDiff (ra, rb) < 1e-6 && maxDiff (ra, rc) < 1e-6 && stats (ra).rms > 0.001,
+                   "the 1.0.0 project sounds the same in a fresh instance, after ORBIT, and as program 7 + macro 2 chosen by hand (max diff "
+                       + juce::String (std::max (maxDiff (ra, rb), maxDiff (ra, rc)), 9) + ", rms " + juce::String (db (stats (ra).rms), 1) + " dBFS)");
+        }
+    }
+    {
+        // the ORBIT host programs: selecting one switches the mode and loads the preset; a CHONK program switches back
+        auto p = make();
+        int good = 0;
+        juce::StringArray bad;
+        for (int i = 0; i < orbit::factoryCount(); i++)
+        {
+            p->setCurrentProgram (mfm1_factory::count + i);
+            auto x = pluginState (*p);
+            auto* oe = x != nullptr ? x->getChildByName ("ORBIT") : nullptr;
+            const auto o = renderPlugin (*p, 48000.0, 256, 2.0, chordScore ({ { 48, 55, 60, 64 } }, 1.4, 0.0));
+            const auto so = stats (o);
+            const bool ok = x != nullptr && x->getStringAttribute ("mode") == "orbit" && p->getCurrentProgram() == mfm1_factory::count + i
+                            && x->getIntAttribute ("orbitProgram", -1) == i && oe != nullptr && oe->toString().contains (orbit::factoryName (i))
+                            && so.finite && so.rms > 0.001 && so.peak <= 0.8913;    // at or below -1 dBFS
+            if (ok) good++;
+            else bad.add (p->getProgramName (mfm1_factory::count + i) + " (rms " + juce::String (db (so.rms), 1) + ")");
+        }
+        check (good == orbit::factoryCount(), juce::String (good) + " of " + juce::String (orbit::factoryCount())
+                                                  + " ORBIT programs switch to ORBIT, load the preset, report the program and play " + bad.joinIntoString (", "));
+        // the program survives the state
+        juce::MemoryBlock mb;
+        p->getStateInformation (mb);
+        auto q = make();
+        q->setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q->getCurrentProgram() == p->getCurrentProgram(), "an ORBIT program comes back from the state (" + q->getProgramName (q->getCurrentProgram()) + ")");
+        p->setCurrentProgram (4);
+        auto x = pluginState (*p);
+        check (x != nullptr && x->getStringAttribute ("mode") == "chonk" && p->getCurrentProgram() == 4 && x->getIntAttribute ("program") == 4,
+               "a CHONK program after an ORBIT one switches back to CHONK (" + p->getProgramName (p->getCurrentProgram()) + ")");
+    }
+    {
         // a DAW project saved by a pre-release build (its state tag has the old name) still loads
         uint8_t img[1024];
         const size_t n = mfe_preset_write (&f0, img, sizeof img);
@@ -748,6 +1003,398 @@ int main (int argc, char** argv)
         auto p = make();
         setPluginState (*p, mb);
         check (p->getCurrentProgram() == 7, "a pre-release project state still loads (program " + juce::String (p->getCurrentProgram()) + ")");
+    }
+
+    // ----------------------------------------------------------------------------- 6. ORBIT mode ---
+    std::printf ("[ORBIT: effects wrapper]\n");
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+    {
+        mfm1::FxChain fx;
+        fx.prepare (fs);
+        mfe_fx_t off;
+        mfe_fx_defaults (&off);
+        fx.setParams (off);
+        // a band-limited test signal (Hann bursts at 1 and 9 kHz): the output must be the input delayed by L
+        const int n = (int) fs;
+        std::vector<float> l ((size_t) n, 0.0f), r ((size_t) n, 0.0f), in ((size_t) n, 0.0f);
+        for (int i = 0; i < 4800; i++)
+        {
+            const double w = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi * i / 4800.0), t = i / fs;
+            in[(size_t) (1000 + i)] = (float) (w * (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * t) + 0.3 * std::sin (2.0 * juce::MathConstants<double>::pi * 9000.0 * t)));
+        }
+        l = r = in;
+        for (int pos = 0; pos < n; pos += 333) fx.process (l.data() + pos, r.data() + pos, std::min (333, n - pos));
+        const int L = fx.latencySamples();
+        double sig = 0, err = 0;
+        for (int i = 0; i + L < n; i++) { sig += (double) in[(size_t) i] * in[(size_t) i]; err += std::pow ((double) l[(size_t) (i + L)] - in[(size_t) i], 2.0); }
+        const double snr = 10.0 * std::log10 (sig / std::max (err, 1e-30));
+        check (snr > 60.0, juce::String (fs / 1000.0, 1) + " kHz: every effect off = the input delayed by exactly the reported " + juce::String (L)
+                               + " samples (" + juce::String (L * 1000.0 / fs, 2) + " ms; " + juce::String (snr, 1) + " dB SNR against the delayed input)");
+        // all six on: finite, it rings (reverb / echo tail), and it sounds at all rates
+        mfe_fx_t on = off;
+        on.fuzz_amount = 6000; on.tape_drive = 12000; on.ens_mode = MFE_ENS_I; on.ens_mix = 16000; on.bbd_mix = 12000; on.oil_mix = 10000; on.rev_amount = 14000;
+        mfm1::FxChain fx2;
+        fx2.prepare (fs);
+        fx2.setParams (on);
+        std::vector<float> a ((size_t) n), b ((size_t) n);
+        for (int i = 0; i < n; i++) a[(size_t) i] = b[(size_t) i] = i < n / 4 ? 0.3f * std::sin (2.0f * 3.14159f * 220.0f * (float) i / (float) fs) : 0.0f;
+        for (int pos = 0; pos < n; pos += 256) fx2.process (a.data() + pos, b.data() + pos, std::min (256, n - pos));
+        double tail = 0;
+        bool fin = true;
+        for (int i = 0; i < n; i++) { fin = fin && std::isfinite (a[(size_t) i]); if (i > n / 2) tail += (double) a[(size_t) i] * a[(size_t) i]; }
+        check (fin && tail > 1e-4, juce::String (fs / 1000.0, 1) + " kHz: the whole chain on (OCT FUZZ, TAPE, ENSEMBLE, BBD, OIL CAN, TWIN TANK): finite, tail "
+                                        + juce::String (db (std::sqrt (tail / (n / 2))), 1) + " dBFS");
+    }
+
+    std::printf ("[ORBIT: engine host]\n");
+    const auto threeChords = [] { auto e = chordScore ({ { 50, 57, 62, 66, 69 }, { 46, 53, 62, 65, 70 }, { 48, 55, 60, 64, 67 }, { 45, 52, 60, 64, 69 } }, 3.0, 0.2); sortScore (e); return e; }();
+    {
+        orbit::Runner r;
+        r.prepare (48000.0, 256);
+        orbitApply (r, orbit::factoryPreset (0));
+        r.createEngine();
+        r.waitIdle (20000);
+        const int core = mfo_latency_samples (r.engineForTests());
+        mfm1::FxChain ref;
+        ref.prepare (48000.0);
+        check (core == 256 && r.latencySamples() == core + ref.latencySamples(),
+               "ORBIT latency at 48 kHz = core STFT " + juce::String (core) + " + effects " + juce::String (ref.latencySamples()) + " = "
+                   + juce::String (r.latencySamples()) + " samples (" + juce::String (r.latencySamples() / 48.0, 2) + " ms)");
+        // no allocation on the audio thread: renders, notes split mid-block, a panel note, a new impulse arriving
+        std::vector<float> l (2048), rr (2048);
+        mfm1::MidiEvent mev[4] = { { 10, { 0x90, 48, 100 }, 3 }, { 77, { 0x90, 55, 100 }, 3 }, { 200, { 0xB0, 1, 90 }, 3 }, { 250, { 0xE0, 0, 80 }, 3 } };
+        uint8_t on[3] = { 0x90, 67, 90 };
+        orbit::ImpulseSpec spec = orbit::factoryPreset (0).imp[0];
+        spec.genType = MFO_GEN_GLASS;
+        allocs = 0;
+        countAllocs = true;
+        bool fin = true;
+        for (int k = 0; k < 600; k++)
+        {
+            if (k == 40) r.postMidi (on, 3);
+            if (k == 60) { countAllocs = false; r.requestImpulse (0, spec); countAllocs = true; }   // the request itself is the message thread's
+            const int n = (k % 5) * 97 + 31;
+            r.process (l.data(), rr.data(), n, k == 3 ? mev : nullptr, k == 3 ? 4 : 0);
+            for (int i = 0; i < n; i++) fin = fin && std::isfinite (l[(size_t) i]) && std::isfinite (rr[(size_t) i]);
+            if (k == 100) { countAllocs = false; r.waitIdle (5000); countAllocs = true; }
+        }
+        countAllocs = false;
+        check (allocs.load() == 0 && fin, "ORBIT audio thread: no heap allocation over 600 blocks with MIDI, a panel note and an impulse swap ("
+                                              + juce::String ((int) allocs.load()) + " allocations), all finite");
+    }
+    {
+        // render calls split at the MIDI offsets: block sizes on the 64-sample grid give the same output
+        auto run = [&] (int bs)
+        {
+            orbit::Runner r;
+            r.prepare (48000.0, bs);
+            auto s = orbit::factoryPreset (7);
+            s.core[MFO_P_DRIFT] = 0.0f;              // the random walks (drift, wobble) step once per render chunk
+            s.core[MFO_P_ORBIT_WOBBLE] = 0.0f;
+            s.mods = {};
+            orbitApply (r, s);
+            r.createEngine();
+            r.waitIdle (20000);
+            r.process (nullptr, nullptr, 0, nullptr, 0);   // assets in
+            r.reset();
+            const int total = 48000 * 3;
+            juce::AudioBuffer<float> out (2, total);
+            std::vector<mfm1::MidiEvent> ev;
+            for (int pos = 0; pos < total; pos += bs)
+            {
+                const int n = std::min (bs, total - pos);
+                ev.clear();
+                for (const auto& e : threeChords)
+                {
+                    const int64_t m = std::llround (e.t * 48000.0);
+                    if (m >= pos && m < pos + n) ev.push_back ({ (int) (m - pos), { e.b[0], e.b[1], e.b[2] }, 3 });
+                }
+                r.process (out.getWritePointer (0, pos), out.getWritePointer (1, pos), n, ev.data(), (int) ev.size());
+            }
+            return out;
+        };
+        const auto a = run (64), b = run (256), c = run (1000);
+        double sig = 0, err = 0;
+        for (int i = 0; i < a.getNumSamples(); i++) { sig += (double) a.getSample (0, i) * a.getSample (0, i); err += std::pow ((double) a.getSample (0, i) - c.getSample (0, i), 2.0); }
+        check (stats (a).rms > 0.003 && maxDiff (a, b) < 1e-6, "ORBIT: block sizes 64 and 256 render the same (events at their exact samples; max diff " + juce::String (maxDiff (a, b), 9) + ")");
+        check (10.0 * std::log10 (sig / std::max (err, 1e-20)) > 40.0, "ORBIT: block size 1000 (off the 64 grid) within " + juce::String (10.0 * std::log10 (sig / std::max (err, 1e-20)), 1) + " dB SNR");
+    }
+    {
+        // CPU at 48 kHz / 256: the heaviest factory presets with five-note chords (best of three runs)
+        for (int pi : { 7, 0, 1 })
+        {
+            orbit::Runner r;
+            r.prepare (48000.0, 256);
+            orbitApply (r, orbit::factoryPreset (pi));
+            r.createEngine();
+            r.waitIdle (20000);
+            const int total = 48000 * 12;
+            std::vector<float> l (256), rr (256);
+            std::vector<mfm1::MidiEvent> ev;
+            double best = 1e9;
+            for (int run = 0; run < 3; run++)
+            {
+                r.reset();
+                const auto t0 = std::chrono::steady_clock::now();
+                for (int pos = 0; pos < total; pos += 256)
+                {
+                    ev.clear();
+                    for (const auto& e : threeChords)
+                    {
+                        const int64_t m = std::llround (e.t * 48000.0);
+                        if (m >= pos && m < pos + 256) ev.push_back ({ (int) (m - pos), { e.b[0], e.b[1], e.b[2] }, 3 });
+                    }
+                    r.process (l.data(), rr.data(), 256, ev.data(), (int) ev.size());
+                }
+                best = std::min (best, std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() / 12.0);
+            }
+            check (best < 0.6, "ORBIT CPU at 48 kHz / 256, " + orbit::factoryName (pi) + ": " + juce::String (best * 100.0, 1) + " % of one core (3 layers, 5-note chords, effects on; limit 60 %)");
+        }
+    }
+    {
+        // root detection: a 220 Hz tone with harmonics and a pluck envelope -> A3 (57)
+        auto d = std::make_shared<orbit::SampleData>();
+        d->rate = 44100.0;
+        d->channels = 1;
+        d->ch[0].resize (44100);
+        const double tau = 2.0 * juce::MathConstants<double>::pi;
+        for (int i = 0; i < 44100; i++)
+        {
+            const double t = i / 44100.0, env = std::min (1.0, t * 200.0) * std::exp (-t * 1.5);
+            d->ch[0][(size_t) i] = (float) (env * (0.6 * std::sin (tau * 220.0 * t) + 0.3 * std::sin (tau * 440.0 * t) + 0.15 * std::sin (tau * 660.0 * t)));
+        }
+        const float root = orbit::detectRoot (*d);
+        check (std::fabs (root - 57.0f) < 0.15f, "root-key detection (YIN): a 220 Hz tone reads " + juce::String (root, 2) + " (A3 = 57)");
+        for (int i = 0; i < 44100; i++) d->ch[0][(size_t) i] = (float) (std::sin (tau * 65.41 * i / 44100.0) * 0.5);
+        const float r2 = orbit::detectRoot (*d);
+        check (std::fabs (r2 - 36.0f) < 0.15f, "root-key detection: 65.4 Hz reads " + juce::String (r2, 2) + " (C2 = 36)");
+    }
+
+    {
+        const auto f = outDir.getChildFile ("orbit_panel_state.json");
+        check (f.replaceWithText (juce::JSON::toString (orbitPanelState(), true)), "ORBIT panel state fixture written: " + f.getFullPathName());
+    }
+
+    std::printf ("[ORBIT: through the VST3]\n");
+    const int nOrbitParams = (int) orbit::hostParams().size();
+    {
+        int found = 0;
+        for (const auto& h : orbit::hostParams()) if (paramByName (*plug, h.name) != nullptr) found++;
+        check (found == nOrbitParams, juce::String (found) + " of " + juce::String (nOrbitParams) + " ORBIT host parameters found by name");
+        if (auto* p = paramByName (*plug, "ORBIT L1 Cutoff"))
+            info ("ORBIT L1 Cutoff shows " + p->getCurrentValueAsText() + ", ORBIT Rate " + paramByName (*plug, "ORBIT Rate")->getCurrentValueAsText()
+                  + ", ORBIT Output " + paramByName (*plug, "ORBIT Output")->getCurrentValueAsText());
+    }
+    {
+        // mode switch through the state, latency reported to the host
+        auto p = make();
+        const std::vector<Ev> note = { { 0.05, { 0x90, 57, 110 } }, { 1.5, { 0x80, 57, 0 } } };
+        renderPlugin (*p, 48000.0, 256, 0.3, note);
+        const int chonkLat = p->getLatencySamples();
+        const auto s0 = orbit::factoryPreset (0);
+        setPluginState (*p, orbitBlob (*p, &s0, "orbit"));
+        mfm1::FxChain ref;
+        ref.prepare (48000.0);
+        const int want = 256 + ref.latencySamples();
+        pumpUntil ([&] { return p->getLatencySamples() == want; }, 3000);
+        const int orbitLat = p->getLatencySamples();
+        auto x = pluginState (*p);
+        check (chonkLat == 104 && orbitLat == want && x != nullptr && x->getStringAttribute ("mode") == "orbit",
+               "mode CHONK -> ORBIT in the state: latency reported to the host " + juce::String (chonkLat) + " -> " + juce::String (orbitLat) + " samples (want " + juce::String (want) + "), mode saved");
+        const auto o = renderPlugin (*p, 48000.0, 256, 2.0, chordScore ({ { 48, 55, 60, 64 } }, 1.6, 0.0));
+        const auto so = stats (o);
+        check (so.finite && so.rms > 0.003 && so.peak < 1.5, "ORBIT plays through the VST3 (rms " + juce::String (db (so.rms), 1) + " dBFS, peak " + juce::String (db (so.peak), 1) + " dBFS)");
+        setPluginState (*p, orbitBlob (*p, nullptr, "chonk"));
+        pumpUntil ([&] { return p->getLatencySamples() == chonkLat; }, 3000);
+        check (p->getLatencySamples() == chonkLat, "back to CHONK: latency " + juce::String (p->getLatencySamples()) + " samples");
+        // CHONK after a round trip through ORBIT is still the 1.0.0 engine: equal to a fresh instance
+        auto fresh = make();
+        const auto a = renderPlugin (*p, 48000.0, 512, 1.5, evs), b = renderPlugin (*fresh, 48000.0, 512, 1.5, evs);
+        check (maxDiff (a, b) < 1e-6, "CHONK after ORBIT renders exactly as a fresh instance (max diff " + juce::String (maxDiff (a, b), 9) + ")");
+    }
+    {
+        // switching while CHONK sounds: an equal-power cross-fade, no click
+        auto p = make();
+        const auto s0 = orbit::factoryPreset (1);
+        setPluginState (*p, orbitBlob (*p, &s0, "chonk"));
+        const auto toOrbit = orbitBlob (*p, &s0, "orbit");
+        const std::vector<Ev> held = { { 0.05, { 0x90, 45, 110 } }, { 0.05, { 0x90, 57, 110 } } };
+        int sw = -1;                                // switch at the first block from 1.0 s
+        const auto out = renderPlugin (*p, 48000.0, 256, 1.6, held, [&] (int64_t pos) { if (pos >= 48000 && sw < 0) { sw = (int) pos; setPluginState (*p, toOrbit); } });
+        const double before = maxJump (out, 24000, sw), across = maxJump (out, sw, sw + 4800);
+        const double after = stats (out, sw + 4800, sw + 9600).rms;
+        check (across < 1.2 * before + 1e-4 && after < 0.25 * stats (out, 24000, sw).rms,
+               "CHONK -> ORBIT while a chord sounds: largest step across the switch " + juce::String (across, 4) + " vs " + juce::String (before, 4)
+                   + " before (no click), the old engine fades out (" + juce::String (db (after), 1) + " dBFS after)");
+    }
+    {
+        // state round trip with an embedded sample; the file deleted; then a missing one
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("vc_orbit_state_test");
+        tmp.deleteRecursively();
+        tmp.createDirectory();
+        auto wavF = tmp.getChildFile ("Cello Swell.wav");
+        {
+            const double tau = 2.0 * juce::MathConstants<double>::pi;
+            juce::AudioBuffer<float> b (2, 66150);
+            for (int i = 0; i < 66150; i++)
+            {
+                const double t = i / 44100.0, env = std::min (1.0, t * 4.0) * (1.0 - t / 1.6);
+                for (int c = 0; c < 2; c++)
+                    b.setSample (c, i, (float) (0.4 * env * (std::sin (tau * 130.81 * t) + 0.4 * std::sin (tau * 261.63 * t + c))));
+            }
+            float g = 1.0f;
+            writeWav (wavF, b, 44100.0, g);
+        }
+        juce::String err;
+        auto smp = orbit::decodeFile (wavF, err);
+        check (smp != nullptr && smp->flac.getSize() > 1000 && std::fabs (smp->detectedRoot - 48.0f) < 0.3f,
+               "a WAV decodes (JUCE AudioFormatManager), FLAC copy " + juce::String ((int) (smp ? smp->flac.getSize() : 0)) + " bytes, root "
+                   + juce::String (smp ? smp->detectedRoot : -1.0f, 2) + " (C3 = 48) " + err);
+        auto s = orbit::factoryPreset (1);
+        s.src[2].kind = orbit::Src::sample;
+        s.src[2].from = orbit::SampleFrom::file;
+        s.src[2].sample = smp;
+        s.src[2].root = 48.0f;
+        s.imp[2] = orbit::ImpulseSpec();
+        s.imp[2].kind = orbit::Imp::sample;
+        s.imp[2].from = orbit::SampleFrom::file;
+        s.imp[2].sample = smp;
+        s.core[(size_t) MFO_LPARAM (2, MFO_L_BODY)] = 0.6f;
+        s.core[MFO_P_PUCK_X] = 0.0f; s.core[MFO_P_PUCK_Y] = -0.6f;
+        s.core[MFO_P_DRIFT] = 0.0f;
+        s.path = orbit::pathHold;
+        auto a = make();
+        setPluginState (*a, orbitBlob (*a, &s, "orbit"));
+        juce::MemoryBlock mb;
+        a->getStateInformation (mb);
+        auto x = pluginState (*a);
+        auto* oe = x != nullptr ? x->getChildByName ("ORBIT") : nullptr;
+        auto* se = oe != nullptr ? oe->getChildByAttribute ("id", "S3") : nullptr;
+        check (se != nullptr && se->getIntAttribute ("embedded") == 1 && se->getStringAttribute ("audio").length() > 1000 && se->getStringAttribute ("path") == wavF.getFullPathName(),
+               "the sample is in the state by path and embedded (" + juce::String (se ? se->getStringAttribute ("audio").length() : 0) + " base64 characters), state "
+                   + juce::String ((int) mb.getSize()) + " bytes");
+        wavF.deleteFile();
+        auto b = make();
+        b->setStateInformation (mb.getData(), (int) mb.getSize());
+        const auto sc = chordScore ({ { 48, 55, 60 } }, 1.8, 0.2);
+        const auto oa = renderPlugin (*a, 48000.0, 256, 2.0, sc), ob = renderPlugin (*b, 48000.0, 256, 2.0, sc);
+        const double sig = stats (oa).rms;
+        double err2 = 0;
+        for (int c = 0; c < 2; c++) for (int i = 0; i < oa.getNumSamples(); i++) err2 += std::pow ((double) oa.getSample (c, i) - ob.getSample (c, i), 2.0);
+        const double snr = 10.0 * std::log10 ((sig * sig * oa.getNumSamples() * 2) / std::max (err2, 1e-20));
+        check (sig > 0.003 && snr > 30.0, "with the file deleted, the reopened project still has the sample (embedded) and sounds the same (" + juce::String (snr, 1) + " dB SNR)");
+        auto x2 = pluginState (*b);
+        auto* oe2 = x2 != nullptr ? x2->getChildByName ("ORBIT") : nullptr;
+        check (oe2 != nullptr && se != nullptr && oe2->getChildByAttribute ("id", "S3") != nullptr
+                   && oe2->getChildByAttribute ("id", "S3")->getStringAttribute ("audio") == se->getStringAttribute ("audio")
+                   && oe2->getStringAttribute ("settings") == oe->getStringAttribute ("settings"),
+               "ORBIT state saved again: same settings (150 core parameters, specs, mod matrix) and the same embedded audio");
+        // not embedded and the file gone: loads, the layer is marked missing, the rest plays
+        if (se != nullptr)
+        {
+            se->removeAttribute ("audio");
+            se->setAttribute ("embedded", 0);
+            if (auto* ie = oe->getChildByAttribute ("id", "I3")) ie->removeAttribute ("audio");
+            juce::MemoryBlock mb3;
+            juce::AudioProcessor::copyXmlToBinary (*x, mb3);
+            auto c = make();
+            setPluginState (*c, mb3);
+            const auto oc = renderPlugin (*c, 48000.0, 256, 2.0, sc);
+            auto x3 = pluginState (*c);
+            const auto st3 = x3 != nullptr && x3->getChildByName ("ORBIT") != nullptr ? juce::JSON::parse (x3->getChildByName ("ORBIT")->getStringAttribute ("settings")) : juce::var();
+            const bool missing = (bool) st3["layers"][2]["src"]["file"]["missing"];
+            check (stats (oc).finite && stats (oc).rms > 0.001 && missing, "a sample neither embedded nor found: the project loads, layer 3 is marked missing ("
+                                                                             + st3["layers"][2]["src"]["file"]["path"].toString() + "), the other layers play");
+        }
+        tmp.deleteRecursively();
+    }
+    {
+        // automation of ORBIT host parameters
+        auto p = make();
+        auto s = orbit::factoryPreset (1);
+        s.path = orbit::pathHold;
+        s.core[MFO_P_PUCK_X] = -0.7f; s.core[MFO_P_PUCK_Y] = 0.6f;     // on layer 1
+        setPluginState (*p, orbitBlob (*p, &s, "orbit"));
+        const auto sc = chordScore ({ { 45, 57, 64 } }, 1.9, 0.0);
+        auto* cut = paramByName (*p, "ORBIT L1 Cutoff");
+        cut->setValueNotifyingHost (0.25f);
+        const auto lo = renderPlugin (*p, 48000.0, 256, 1.8, sc);
+        cut->setValueNotifyingHost (0.95f);
+        const auto hi = renderPlugin (*p, 48000.0, 256, 1.8, sc);
+        const double bl = brightness (lo, 24000, 80000), bh = brightness (hi, 24000, 80000);
+        check (bh > 1.5 * bl, "ORBIT L1 Cutoff automation changes the sound (brightness " + juce::String (bl, 4) + " -> " + juce::String (bh, 4) + ")");
+        auto* outp = paramByName (*p, "ORBIT Output");
+        outp->setValueNotifyingHost (0.3f);
+        const double q = stats (renderPlugin (*p, 48000.0, 256, 1.8, sc), 24000, 80000).rms;
+        outp->setValueNotifyingHost (0.7f);
+        const double l = stats (renderPlugin (*p, 48000.0, 256, 1.8, sc), 24000, 80000).rms;
+        check (l > 3.0 * q, "ORBIT Output automation (" + juce::String (db (q), 1) + " -> " + juce::String (db (l), 1) + " dBFS)");
+        // the puck automated across the field during the chord: layer 1 -> the dry node changes the sound
+        auto* px = paramByName (*p, "ORBIT Puck X");
+        auto* py = paramByName (*p, "ORBIT Puck Y");
+        px->setValueNotifyingHost (0.15f);
+        py->setValueNotifyingHost (0.8f);
+        const auto moving = renderPlugin (*p, 48000.0, 256, 1.8, sc, [&] (int64_t pos)
+        {
+            const float t = juce::jlimit (0.0f, 1.0f, (float) pos / 86400.0f);
+            px->setValueNotifyingHost (0.15f + 0.7f * t);
+            py->setValueNotifyingHost (0.8f - 0.65f * t);
+        });
+        const double m0 = brightness (moving, 20000, 30000), m1 = brightness (moving, 76000, 86000);
+        check (stats (moving).finite && std::fabs (m0 - m1) > 0.1 * std::max (m0, m1),
+               "ORBIT Puck X / Y automated across the field moves the blend (brightness " + juce::String (m0, 4) + " -> " + juce::String (m1, 4) + ")");
+        info ("ORBIT Rate shows " + paramByName (*p, "ORBIT Rate")->getCurrentValueAsText() + "; L1 Body " + paramByName (*p, "ORBIT L1 Body")->getCurrentValueAsText());
+    }
+    {
+        // every factory preset through the VST3 at 48 kHz / 256: finite, sounding; a WAV of each in examples/orbit/presets
+        const auto repo = juce::File (path).getParentDirectory().getParentDirectory().getParentDirectory();
+        const auto wavDir = repo.getChildFile ("examples").getChildFile ("orbit").getChildFile ("presets");
+        int ok = 0;
+        juce::StringArray bad, written;
+        for (int i = 0; i < orbit::factoryCount(); i++)
+        {
+            auto p = make();
+            const auto s = orbit::factoryPreset (i);
+            TempoHead head;
+            head.bpm = 112.0;
+            p->setPlayHead (&head);
+            setPluginState (*p, orbitBlob (*p, &s, "orbit"));
+            std::vector<Ev> sc;
+            switch (i)
+            {
+                case 0: sc = chordScore ({ { 36, 48, 55, 63 }, { 32, 44, 51, 60 }, { 34, 46, 53, 62 }, { 31, 43, 50, 58 } }, 2.4, 0.15); break;
+                case 3: sc = lineScore ({ 72, 79, 84, 76, 81, 74, 79, 86, 77, 72, 84, 79, 76, 83, 74, 88, 81, 76, 72, 79 }, 0.4, 0.9); break;
+                case 4: sc = lineScore ({ 60, 64, 67, 72, 71, 67, 64, 62, 65, 69, 72, 74, 72, 69, 65, 64, 60, 55, 60, 67, 72, 76, 74, 72 }, 0.25, 0.1); break;
+                case 5: sc = chordScore ({ { 36, 43, 60, 67 }, { 36, 43, 58, 65 } }, 5.0, 0.3); break;
+                case 6: sc = chordScore ({ { 41, 48, 53, 60 }, { 39, 46, 51, 58 } }, 4.3, 0.05); break;
+                case 7: sc = chordScore ({ { 50, 57, 62, 69 }, { 46, 53, 62, 65 }, { 48, 55, 60, 67 }, { 45, 52, 60, 64 } }, 2.6, 0.2); break;
+                default: sc = chordScore ({ { 50, 57, 62, 66 }, { 47, 54, 59, 62 }, { 43, 50, 59, 62 } }, 3.2, 0.25); break;
+            }
+            sortScore (sc);
+            const double secs = sc.back().t + 3.0;
+            const auto out = renderPlugin (*p, 48000.0, 256, secs, sc);
+            p->setPlayHead (nullptr);
+            const auto st = stats (out);
+            if (st.finite && st.rms > 0.002 && st.peak <= 0.8913) ok++;      // every preset peaks at or below -1 dBFS
+            else bad.add (s.presetName + " rms " + juce::String (db (st.rms), 1) + " peak " + juce::String (db (st.peak), 1));
+            float g = 1.0f;
+            const auto f = wavDir.getChildFile (juce::String (i + 1).paddedLeft ('0', 2) + "_" + s.presetName.toLowerCase().replaceCharacters (" -", "__") + ".wav");
+            if (writeWav (f, out, 48000.0, g))
+                written.add (f.getFileName() + " (" + juce::String (secs, 1) + " s, rms " + juce::String (db (st.rms), 1) + " dBFS, peak " + juce::String (db (st.peak), 1) + " dBFS)");
+        }
+        check (ok == orbit::factoryCount(), juce::String (ok) + " of " + juce::String (orbit::factoryCount()) + " ORBIT factory presets play through the VST3 (finite, sounding, peak at or below -1 dBFS) "
+                                                + bad.joinIntoString (", "));
+        info ("preset renders in " + wavDir.getFullPathName() + ":");
+        for (const auto& w : written) info ("  " + w);
+        check (written.size() == orbit::factoryCount(), juce::String (written.size()) + " preset WAVs written");
+        // CPU through the VST3, the three-layer preset, 48 kHz / 256
+        auto p = make();
+        const auto s = orbit::factoryPreset (7);
+        setPluginState (*p, orbitBlob (*p, &s, "orbit"));
+        const auto t0 = std::chrono::steady_clock::now();
+        renderPlugin (*p, 48000.0, 256, 12.0, threeChords);
+        const double cpu = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() / 12.0;
+        check (cpu < 0.6, "ORBIT CPU through the VST3 (THREE-BODY ORBIT, 5-note chords, 48 kHz / 256): " + juce::String (cpu * 100.0, 1) + " % of one core");
     }
 
     // ------------------------------------------------------------------------------ 5. editor ---
@@ -804,6 +1451,73 @@ int main (int argc, char** argv)
             ed.reset();
             pumpUntil ({}, 300);
         }
+    }
+
+    if (shots)
+    {
+        std::printf ("[editor: the ORBIT panel]\n");
+        auto p = make();
+        const auto s0 = orbit::factoryPreset (0);
+        setPluginState (*p, orbitBlob (*p, &s0, "orbit"));
+        p->prepareToPlay (48000.0, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditorIfNeeded());
+        check (ed != nullptr, "ORBIT editor created");
+        if (ed != nullptr)
+        {
+            juce::DocumentWindow win ("Vintage Chonk ORBIT (host test)", juce::Colours::black, 0, true);
+            win.setUsingNativeTitleBar (true);
+            win.setContentNonOwned (ed.get(), true);
+            win.setTopLeftPosition (40, 40);
+            win.setVisible (true);
+            // play a chord while the panel runs, so the meters, puck and voices move
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer midi;
+            const uint8_t notes[4] = { 48, 55, 60, 63 };
+            auto* peer = win.getPeer();
+            auto shot = [&] (const juce::String& name)
+            {
+                if (peer == nullptr) return juce::Image();
+                auto img = captureClient ((HWND) peer->getNativeHandle());
+                savePng (img, outDir.getChildFile (name + "_" + juce::String (img.getWidth()) + "x" + juce::String (img.getHeight()) + ".png"));
+                return img;
+            };
+            const auto t0 = juce::Time::getMillisecondCounter();
+            int blocks = 0;
+            while (juce::Time::getMillisecondCounter() - t0 < 9000)
+            {
+                midi.clear();
+                if (blocks == 200) for (auto n : notes) { const uint8_t m[3] = { 0x90, n, 100 }; midi.addEvent (m, 3, 0); }
+                buf.clear();
+                p->processBlock (buf, midi);
+                blocks++;
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
+            }
+            auto img = shot ("editor_orbit");
+            if (img.isValid())
+            {
+                // the cream lacquer panel: most of it is warm and light; many colours (a rendered page, not a blank WebView)
+                std::set<juce::uint32> cols;
+                int cream = 0, total = 0;
+                for (int y = 0; y < img.getHeight(); y += 5)
+                    for (int x2 = 0; x2 < img.getWidth(); x2 += 5)
+                    {
+                        const auto c = img.getPixelAt (x2, y);
+                        cols.insert (c.getARGB() & 0xfcfcfcu);
+                        total++;
+                        if (c.getRed() > 200 && c.getGreen() > 185 && c.getBlue() > 150 && c.getRed() >= c.getBlue()) cream++;
+                    }
+                check (cols.size() > 300 && cream > total / 3, "the ORBIT panel is drawn in the running plugin (" + juce::String ((int) cols.size()) + " colours, "
+                                                                   + juce::String (100 * cream / std::max (1, total)) + " % cream lacquer)");
+            }
+            ed->setSize (960, 600);
+            pumpUntil ({}, 1500);
+            shot ("editor_orbit");
+            win.setVisible (false);
+            win.clearContentComponent();
+            ed.reset();
+            pumpUntil ({}, 300);
+        }
+        p->releaseResources();
     }
 
     std::printf ("\n%d passed, %d failed\n", passes, fails);

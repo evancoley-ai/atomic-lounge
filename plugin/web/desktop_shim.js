@@ -8,6 +8,8 @@
 'use strict';
 (function () {
   const init = window.MFHostInit || {};
+  // the ORBIT page (web/orbit/orbit.html) has its own bridge; it shares only the keyboard below
+  const isOrbitPage = /orbit\.html$/i.test(location.pathname);
   function send(op, a) {
     const j = window.__JUCE__;
     try { if (j && j.backend) j.backend.emitEvent('mfm1', { op, a }); } catch (e) { /* page closing */ }
@@ -76,7 +78,35 @@
     toast(t) { const U = window.MFUI; if (U && U.toast) U.toast(String(t)); },
   };
   // a page reload (or a late start) asks for the current state again
-  window.addEventListener('DOMContentLoaded', () => send('hello', []));
+  if (!isOrbitPage) window.addEventListener('DOMContentLoaded', () => { send('hello', []); addModeSwitch(); });
+
+  // the CHONK | ORBIT mode switch (plugin only): in the panel foot, where the tablet shows its feature line
+  function addModeSwitch() {
+    const foot = document.getElementById('panel-foot');
+    if (!foot || document.getElementById('mode-switch')) return;
+    const note = foot.querySelector('.foot-note');
+    if (note) note.style.display = 'none';
+    const st = document.createElement('style');
+    st.textContent = `#mode-switch{margin-left:auto;margin-right:18px;display:flex;padding:3px;border-radius:19px;
+      background:linear-gradient(160deg,#fff,#a9aaa9 35%,#f0f0ee 55%,#7f807e 85%,#d9dad8);box-shadow:0 2px 6px rgba(0,0,0,.5)}
+      #mode-switch .in{display:flex;border-radius:16px;background:linear-gradient(#2a1c12,#140c07);box-shadow:inset 0 2px 5px #000;padding:2px}
+      #mode-switch b{display:flex;align-items:center;justify-content:center;width:92px;height:30px;border-radius:14px;cursor:pointer;
+      font-size:13px;letter-spacing:3px;font-weight:700;color:rgba(243,233,210,.5)}
+      #mode-switch b.on{color:#f6efde;background:linear-gradient(#f08a3c,#c9560f);box-shadow:0 0 10px rgba(240,138,60,.5),inset 0 1px 0 rgba(255,255,255,.4)}
+      #mode-switch b:not(.on):hover{color:#f6efde}`;
+    document.head.appendChild(st);
+    const sw = document.createElement('div');
+    sw.id = 'mode-switch';
+    sw.title = 'Switch engine: CHONK (wavetable synth) or ORBIT (poly-convolution)';
+    sw.innerHTML = '<div class="in"><b class="on" data-m="chonk">CHONK</b><b data-m="orbit">ORBIT</b></div>';
+    sw.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('b');
+      if (!b || b.classList.contains('on')) return;
+      e.preventDefault(); e.stopPropagation();
+      send('mode', [b.dataset.m]);
+    });
+    foot.appendChild(sw);
+  }
 
   // ---- desktop extras ----------------------------------------------------------------------------
   // Ctrl+wheel is fine-adjust on a knob, never page zoom; browser keys (reload, find, print) are off

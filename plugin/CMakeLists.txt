@@ -2,7 +2,7 @@
 # Vintage Chonk VST3 instrument (Windows): the dsp/ engine + the tablet's web panel in a JUCE 8 WebView2.
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1
 cmake_minimum_required(VERSION 3.22)
-project(VintageChonk VERSION 1.0.0 LANGUAGES C CXX)   # the release version (JucePlugin_VersionString)
+project(VintageChonk VERSION 1.1.0 LANGUAGES C CXX)   # the version (JucePlugin_VersionString); 1.1.0 = CHONK + ORBIT
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,8 +65,11 @@ else()
     set(PANEL_DIR "${REPO}/panel")
 endif()
 file(GLOB_RECURSE WWW_FILES CONFIGURE_DEPENDS "${PANEL_DIR}/*.html" "${PANEL_DIR}/*.css" "${PANEL_DIR}/*.js")
+# the ORBIT panel (plugin/web/orbit): its own page, served next to the tablet panel's files
+file(GLOB ORBIT_WWW CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/orbit/*.html" "${CMAKE_CURRENT_SOURCE_DIR}/web/orbit/*.css"
+     "${CMAKE_CURRENT_SOURCE_DIR}/web/orbit/*.js")
 juce_add_binary_data(mfm1_www NAMESPACE MFM1Www HEADER_NAME MFM1Www.h
-    SOURCES ${WWW_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/web/desktop_shim.js")
+    SOURCES ${WWW_FILES} ${ORBIT_WWW} "${CMAKE_CURRENT_SOURCE_DIR}/web/desktop_shim.js")
 
 # WebView2: Microsoft's official SDK (NuGet Microsoft.Web.WebView2, pinned in plugin/fetch_deps.ps1):
 # its headers, and its static loader linked in
@@ -84,8 +87,8 @@ juce_add_plugin(VintageChonk
     BUNDLE_ID "com.coley.vintagechonk"
     PLUGIN_MANUFACTURER_CODE Cly1
     PLUGIN_CODE Mfm1
-    DESCRIPTION "Vintage Chonk: wavetable synth in analog dress"
-    FORMATS VST3
+    DESCRIPTION "Vintage Chonk: analog-style synth with the ORBIT poly-convolution engine"
+    FORMATS VST3 Standalone
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
@@ -96,8 +99,10 @@ juce_add_plugin(VintageChonk
     VST3_AUTO_MANIFEST FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
+set(ORBIT_SOURCES src/FxChain.cpp src/OrbitModel.cpp src/OrbitRunner.cpp)
 target_sources(VintageChonk PRIVATE
     src/EngineRunner.cpp
+    ${ORBIT_SOURCES}
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
     src/PresetStore.cpp)
@@ -123,7 +128,7 @@ target_link_libraries(VintageChonk
 # ---------------------------------------------------------------------------------- tests ---
 # host test: loads the built .vst3 like a DAW, plus direct EngineRunner checks
 juce_add_console_app(VintageChonkHostTest PRODUCT_NAME "VintageChonkHostTest")
-target_sources(VintageChonkHostTest PRIVATE tests/HostTest.cpp src/EngineRunner.cpp src/PresetStore.cpp)
+target_sources(VintageChonkHostTest PRIVATE tests/HostTest.cpp src/EngineRunner.cpp src/PresetStore.cpp ${ORBIT_SOURCES})
 target_include_directories(VintageChonkHostTest PRIVATE src generated)
 target_compile_definitions(VintageChonkHostTest PRIVATE
     JUCE_PLUGINHOST_VST3=1
@@ -137,6 +142,19 @@ target_link_libraries(VintageChonkHostTest
         juce::juce_audio_processors
         juce::juce_audio_utils
         juce::juce_gui_extra
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+# development tool: ORBIT factory preset levels and renders (not part of the plugin; built on request)
+juce_add_console_app(VintageChonkOrbitTool PRODUCT_NAME "VintageChonkOrbitTool")
+target_sources(VintageChonkOrbitTool PRIVATE tools/orbit_tool.cpp src/EngineRunner.cpp src/PresetStore.cpp ${ORBIT_SOURCES})
+target_include_directories(VintageChonkOrbitTool PRIVATE src generated)
+target_compile_definitions(VintageChonkOrbitTool PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(VintageChonkOrbitTool
+    PRIVATE
+        mfe_dsp
+        juce::juce_audio_formats
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

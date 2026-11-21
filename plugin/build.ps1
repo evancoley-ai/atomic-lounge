@@ -5,9 +5,11 @@
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1            # plugin
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test      # plugin + host test, then run it
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Clean     # fresh configure
+#   powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Dev -Test # development build: plugin\build-dev ->
+#                                                                         plugin\dist-dev (the release dist is untouched)
 # clang-cl (for the engine's C): $env:MFE_CLANG_CL, else C:\Program Files\LLVM\bin, else an Android NDK's
 # (under $env:MFE_NDK_DIR, default D:\Android\sdk\ndk).
-param([switch]$Test, [switch]$Clean, [switch]$NoScreenshot)
+param([switch]$Test, [switch]$Clean, [switch]$NoScreenshot, [switch]$Dev)
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $repo = Split-Path $here -Parent
@@ -47,28 +49,30 @@ if (-not $clangcl) { throw 'clang-cl.exe not found: install LLVM (C:\Program Fil
 Write-Host "C compiler (engine): $clangcl"
 $clangclFwd = $clangcl -replace '\\', '/'
 
-$build = "$here\build"
+$build = if ($Dev) { "$here\build-dev" } else { "$here\build" }
 if ($Clean -and (Test-Path $build)) { Remove-Item -Recurse -Force $build }
 & $cmake -S $here -B $build -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninja" -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DMFE_CLANG_CL=$clangclFwd"
 if ($LASTEXITCODE) { throw 'configure failed' }
-& $cmake --build $build --target VintageChonk_VST3 --parallel
+& $cmake --build $build --target VintageChonk_VST3 VintageChonk_Standalone --parallel
 if ($LASTEXITCODE) { throw 'build failed' }
 
 $bundle = Get-ChildItem "$build\VintageChonk_artefacts" -Recurse -Directory -Filter "$name.vst3" | Select-Object -First 1
 if (-not $bundle) { throw "no $name.vst3 in the build" }
-$dist = "$here\dist"
+$dist = if ($Dev) { "$here\dist-dev" } else { "$here\dist" }
 New-Item -ItemType Directory -Force $dist | Out-Null
 if (Test-Path "$dist\$name.vst3") { Remove-Item -Recurse -Force "$dist\$name.vst3" }
 Copy-Item -Recurse $bundle.FullName "$dist\$name.vst3"
 $dll = Get-ChildItem "$dist\$name.vst3" -Recurse -Filter '*.vst3' -File | Select-Object -First 1
+$standalone = Get-ChildItem "$build\VintageChonk_artefacts" -Recurse -File -Filter "$name.exe" | Select-Object -First 1
+if ($standalone) { Copy-Item -Force $standalone.FullName "$dist\$name.exe" }
 Write-Host ("built: {0} ({1:N0} bytes)" -f $dll.FullName, $dll.Length)
 
 if ($Test) {
     & $cmake --build $build --target VintageChonkHostTest --parallel
     if ($LASTEXITCODE) { throw 'host test build failed' }
     $exe = Get-ChildItem "$build\VintageChonkHostTest_artefacts" -Recurse -Filter 'VintageChonkHostTest.exe' | Select-Object -First 1
-    $targs = @("$dist\$name.vst3", "$here\build\test_out")
+    $targs = @("$dist\$name.vst3", "$build\test_out")
     if ($NoScreenshot) { $targs += '--no-screenshot' }
     & $exe.FullName @targs
     if ($LASTEXITCODE) { throw "host test failed ($LASTEXITCODE)" }

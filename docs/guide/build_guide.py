@@ -4,7 +4,8 @@
 #   python docs/guide/build_guide.py --no-shots  reuse docs/guide/img as it is
 # 1. builds tools/guide_shots (the real panel UI on the desktop emulation, MSYS2 UCRT64 gcc) and
 #    writes every FM-1 screen 3x (nearest neighbour) to docs/guide/img/fm1/
-# 2. copies the tablet screenshots (build/android_ui_shots, from tests/test_panel.mjs)
+# 2. copies the tablet screenshots (build/android_ui_shots, from tests/test_panel.mjs) and makes the ORBIT
+#    panel pictures (orbit_shots.mjs + the host test's plugin window capture; run plugin\build.ps1 -Test first)
 # 3. prints guide.html to PDF with headless Chrome twice: the first pass finds the page of every
 #    contents entry (the PDF's own link targets), the second prints the numbers
 # 4. renders every PDF page to build/guide_preview/ (PyMuPDF) for review
@@ -59,6 +60,65 @@ def shots():
                 os.path.join(tab, f + ".jpg"), quality=86)
         else:
             print("missing tablet screenshot", p, "(run: node tests/test_panel.mjs)")
+
+
+def orbit_shots():
+    """ORBIT panel pictures: docs/guide/orbit_shots.mjs (the real panel page in headless Chrome, fed the state the
+    plugin pushes, from the host test's plugin/build*/test_out/orbit_panel_state.json) and the host test's
+    capture of the running plugin window (editor_orbit_1440x900.png); JPEG into docs/guide/img/orbit/."""
+    from PIL import Image
+    raw = os.path.join(TMP, "orbit_raw")
+    shutil.rmtree(raw, ignore_errors=True)
+    subprocess.run(["node", os.path.join(HERE, "orbit_shots.mjs"), raw], cwd=ROOT, check=True)
+    out = os.path.join(HERE, "img", "orbit")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    for f in sorted(os.listdir(raw)):
+        im = Image.open(os.path.join(raw, f)).convert("RGB")
+        w = min(im.width, 2000)
+        im.resize((w, int(im.height * w / im.width)), Image.LANCZOS).save(
+            os.path.join(out, f.replace("orbit_", "", 1).replace(".png", ".jpg")), quality=86)
+    cands = [os.path.join(ROOT, "plugin", d, "test_out", "editor_orbit_1440x900.png") for d in ("build", "build-dev")]
+    cands = sorted((c for c in cands if os.path.exists(c)), key=os.path.getmtime, reverse=True)
+    if cands:
+        Image.open(cands[0]).convert("RGB").save(os.path.join(out, "plugin_window.jpg"), quality=88)
+    else:
+        print("missing the plugin window capture (run plugin\build.ps1 -Test)")
+
+
+def svg_orbit_flow():
+    """ORBIT signal flow: three layers (source x impulse through the matrix, filter, amp), blender, master."""
+    s = ['<svg viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg" style="width:100%" font-family="Nunito, sans-serif">']
+
+    def box(x, y, w, h, label, fill, tc="#fff", fs=13):
+        s.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="{fill}"/>')
+        s.append(f'<text x="{x + w / 2}" y="{y + h / 2 + fs / 3}" text-anchor="middle" font-size="{fs}" font-weight="800" fill="{tc}">{label}</text>')
+
+    def arrow(x1, y1, x2, y2):
+        s.append(f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#5a3a4a" stroke-width="2" marker-end="url(#oa)"/>')
+    s.append('<defs><marker id="oa" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5a3a4a"/></marker></defs>')
+    for k in range(3):
+        y = 18 + k * 92
+        s.append(f'<rect x="6" y="{y - 8}" width="508" height="82" rx="12" fill="#f6ead0" stroke="#e2c89a"/>')
+        s.append(f'<text x="18" y="{y + 8}" font-size="11" font-weight="800" fill="#a8401a">LAYER {k + 1}</text>')
+        box(18, y + 16, 110, 40, "SOURCE", "#e2622a", fs=12)
+        box(18 + 128, y + 16, 150, 40, "MATRIX", "#30baac", fs=12)
+        box(18 + 128, y - 4, 150, 16, "BODY TONE GRAIN MOTION PITCH", "#f6ead0", "#1d6f67", fs=8)
+        box(18 + 296, y + 16, 80, 40, "FILTER", "#7a5a2a", fs=12)
+        box(18 + 394, y + 16, 80, 40, "AMP", "#7a5a2a", fs=12)
+        arrow(128, y + 36, 146, y + 36); arrow(296, y + 36, 314, y + 36); arrow(394, y + 36, 412, y + 36)
+        arrow(492, y + 36, 556, 150)
+    s.append('<text x="221" y="290" text-anchor="middle" font-size="10.5" fill="#5a3a4a">IMPULSE into the matrix: sample, generated, synth print or LIVE layer</text>')
+    s.append('<circle cx="615" cy="150" r="58" fill="#2e1e12" stroke="#b9b9b6" stroke-width="5"/>')
+    s.append('<text x="615" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#ffb347">ORBIT</text>')
+    s.append('<text x="615" y="162" text-anchor="middle" font-size="12" font-weight="800" fill="#ffb347">BLENDER</text>')
+    s.append('<text x="615" y="225" text-anchor="middle" font-size="10" fill="#5a3a4a">nodes 1, 2, 3, DRY + puck</text>')
+    arrow(673, 150, 700, 150)
+    box(702, 96, 92, 108, "MASTER", "#1e1022", "#f2c02e", fs=12)
+    s.append('<text x="748" y="222" text-anchor="middle" font-size="9.5" fill="#5a3a4a">drift, tape age,</text>')
+    s.append('<text x="748" y="235" text-anchor="middle" font-size="9.5" fill="#5a3a4a">6 effects, output</text>')
+    s.append('</svg>')
+    return "".join(s)
 
 
 KW = 56          # white key pitch in the SVGs
@@ -184,7 +244,7 @@ def svg_flow():
 
 
 def expand(html):
-    parts = {"panel": svg_panel(), "keys": svg_keys(), "flow": svg_flow()}
+    parts = {"panel": svg_panel(), "keys": svg_keys(), "flow": svg_flow(), "orbitflow": svg_orbit_flow()}
     return re.sub(r"<!--INCLUDE (\w+)-->", lambda m: parts[m.group(1)], html)
 
 
@@ -199,6 +259,7 @@ def main():
     import fitz
     if "--no-shots" not in sys.argv:
         shots()
+        orbit_shots()
     html = expand(open(SRC, encoding="utf-8").read())
     pass1 = os.path.join(HERE, "_pass.html")
     open(pass1, "w", encoding="utf-8").write(html)
