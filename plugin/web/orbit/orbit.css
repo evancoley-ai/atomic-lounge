@@ -155,3 +155,17 @@ input.txt { font-family: var(--font); font-size: 13px; letter-spacing: 2px; padd
 .modrow { display: flex; align-items: center; gap: 10px; font-size: 10px; letter-spacing: 1.4px; font-weight: 600; padding: 4px 6px; }
 .modrow .n { width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modrow .v { width: 44px; text-align: right; color: var(--ink-dim); }
+
+/* 1.2.0: tighter pills (SOURCE / IMPULSE with INPUT), the MOTION switch, the input meter */
+.pill.tight b { padding: 0 6px; letter-spacing: 1px; font-size: 8px; }
+.pill b.sel { color: #c9560f; box-shadow: inset 0 0 0 1px rgba(201,86,15,.45); }
+.motion { position: absolute; height: 22px; padding: 0 9px 0 5px; border-radius: 11px; display: flex; align-items: center; gap: 5px;
+  background: #d8ccb1; box-shadow: inset 0 1px 3px rgba(70,45,20,.35), 0 1px 0 rgba(255,255,255,.8);
+  font-size: 8.5px; letter-spacing: 1.5px; font-weight: 700; color: #7d705f; }
+.motion .jewel { position: relative; width: 12px; height: 12px; }
+.motion b { color: #7d705f; min-width: 22px; }
+.motion.on b { color: #c9560f; }
+.motion:hover { color: var(--ink); }
+.inbar { position: absolute; border-radius: 3px; background: rgba(255,190,110,.08); box-shadow: inset 0 1px 2px rgba(0,0,0,.8); overflow: hidden; }
+.inbar i { position: absolute; left: 1px; right: 1px; bottom: 1px; top: 1px; border-radius: 2px; transform-origin: 50% 100%; transform: scaleY(0);
+  background: linear-gradient(#ff6a3a, #ffb347 22%, #ffcf8a 60%, #3fb8ac); }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk plugin, ORBIT mode: settings, host parameter mapping, serialising, sample decoding and root
+// Atomic Lounge plugin (formerly Vintage Chonk), ORBIT mode: settings, host parameter mapping, serialising, sample decoding and root
 // detection, Chonk preset references, factory and user presets (see OrbitModel.h).
 #include "OrbitModel.h"
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -63,9 +63,27 @@ const std::vector<HostParam>& hostParams()
         for (int i = 0; i < numFx; i++) v.push_back ({ juce::String ("orbit_fx_") + fx[i], juce::String ("ORBIT FX ") + fxn[i], spFx0 + i, Map::special });
         for (int i = 0; i < numMacros; i++)
             v.push_back ({ "orbit_macro" + juce::String (i + 1), "ORBIT Macro " + juce::String (i + 1), spMacro0 + i, Map::special });
+        // 1.2.0: held orbit, live input (appended, so the 1.1.0 indices and ids stay)
+        v.push_back ({ "orbit_motion", "ORBIT Motion", spMotion, Map::special, true });
+        v.push_back ({ "orbit_puck_drift", "ORBIT Puck Drift", spPuckDrift, Map::special });
+        v.push_back ({ "orbit_input_trim", "ORBIT Input Trim", spInTrim, Map::special });
+        for (int l = 0; l < layers; l++)
+            v.push_back ({ "orbit_l" + juce::String (l + 1) + "_src_input", "ORBIT L" + juce::String (l + 1) + " Source Input", spSrcIn0 + l, Map::special, true });
+        for (int l = 0; l < layers; l++)
+            v.push_back ({ "orbit_l" + juce::String (l + 1) + "_imp_input", "ORBIT L" + juce::String (l + 1) + " Impulse Input", spImpIn0 + l, Map::special, true });
+        for (int l = 0; l < layers; l++)
+            v.push_back ({ "orbit_l" + juce::String (l + 1) + "_input_gate", "ORBIT L" + juce::String (l + 1) + " Input Gate", spGate0 + l, Map::special, true });
         return v;
     }();
     return list;
+}
+
+int hostIndexForSpecial (int special)
+{
+    const auto& h = hostParams();
+    for (int i = 0; i < (int) h.size(); i++)
+        if (h[(size_t) i].map == Map::special && h[(size_t) i].target == special) return i;
+    return -1;
 }
 
 int hostIndexForCore (int coreId)
@@ -107,6 +125,12 @@ float hostNormFromSettings (const HostParam& h, const Settings& s)
     if (h.target == spTapeAge) return s.tapeAge;
     if (h.target >= spFx0 && h.target < spFx0 + numFx) return s.fxAmt[h.target - spFx0];
     if (h.target >= spMacro0 && h.target < spMacro0 + numMacros) return s.macro[h.target - spMacro0];
+    if (h.target == spMotion) return s.path != pathHold ? 1.0f : 0.0f;
+    if (h.target == spPuckDrift) return s.puckDrift;
+    if (h.target == spInTrim) return juce::jlimit (0.0f, 1.0f, 0.5f + s.inTrimDb / (2.0f * inTrimRange));
+    if (h.target >= spSrcIn0 && h.target < spSrcIn0 + layers) return s.srcInput[h.target - spSrcIn0] ? 1.0f : 0.0f;
+    if (h.target >= spImpIn0 && h.target < spImpIn0 + layers) return s.impInput[h.target - spImpIn0] ? 1.0f : 0.0f;
+    if (h.target >= spGate0 && h.target < spGate0 + layers) return s.inGate[h.target - spGate0] ? 1.0f : 0.0f;
     return 0.0f;
 }
 
@@ -119,6 +143,17 @@ void hostNormToSettings (const HostParam& h, float v, Settings& s)
     else if (h.target == spTapeAge) s.tapeAge = v;
     else if (h.target >= spFx0 && h.target < spFx0 + numFx) s.fxAmt[h.target - spFx0] = v;
     else if (h.target >= spMacro0 && h.target < spMacro0 + numMacros) s.macro[h.target - spMacro0] = v;
+    else if (h.target == spMotion)
+    {
+        const bool on = v > 0.5f;
+        if (s.path != pathHold) s.shape = s.path;
+        s.path = on ? juce::jlimit ((int) pathCircle, (int) pathDrawn, s.shape) : (int) pathHold;
+    }
+    else if (h.target == spPuckDrift) s.puckDrift = v;
+    else if (h.target == spInTrim) s.inTrimDb = inTrimDbFromNorm (v);
+    else if (h.target >= spSrcIn0 && h.target < spSrcIn0 + layers) s.srcInput[h.target - spSrcIn0] = v > 0.5f;
+    else if (h.target >= spImpIn0 && h.target < spImpIn0 + layers) s.impInput[h.target - spImpIn0] = v > 0.5f;
+    else if (h.target >= spGate0 && h.target < spGate0 + layers) s.inGate[h.target - spGate0] = v > 0.5f ? 1 : 0;
 }
 
 float rateHz (float n) { return 0.01f * std::pow (2000.0f, juce::jlimit (0.0f, 1.0f, n)); }
@@ -139,7 +174,11 @@ juce::String rateText (float n, bool sync)
 
 juce::String hostText (const HostParam& h, float v, bool sync)
 {
-    if (h.target == spRate) return rateText (v, sync);
+    if (h.target == spRate) return v <= 0.0f && ! sync ? juce::String ("STOP") : rateText (v, sync);
+    if (h.target == spMotion) return v > 0.5f ? "ON" : "OFF";
+    if (h.target >= spSrcIn0 && h.target < spImpIn0 + layers) return v > 0.5f ? "INPUT" : "OFF";
+    if (h.target >= spGate0 && h.target < spGate0 + layers) return v > 0.5f ? "NOTE" : "THRU";
+    if (h.target == spInTrim) { const float db = inTrimDbFromNorm (v); return (db > 0.05f ? "+" : "") + juce::String (db, 1) + " dB"; }
     if (h.map == Map::sq2)
     {
         const float g = coreFromNorm (h, v);
@@ -292,7 +331,7 @@ void specFromVar (const juce::var& v, ImpulseSpec& s)
 juce::var toVar (const Settings& s)
 {
     auto* o = new juce::DynamicObject();
-    o->setProperty ("v", 1);
+    o->setProperty ("v", 2);
     juce::Array<juce::var> core;
     for (float c : s.core) core.add (c);
     o->setProperty ("core", core);
@@ -346,6 +385,24 @@ juce::var toVar (const Settings& s)
     pr->setProperty ("kind", s.presetKind);
     pr->setProperty ("dirty", s.dirty);
     o->setProperty ("preset", juce::var (pr));
+    // 1.2.0
+    o->setProperty ("shape", s.shape);
+    o->setProperty ("puckDrift", s.puckDrift);
+    o->setProperty ("legacyWobble", s.legacyWobble);
+    auto* in = new juce::DynamicObject();
+    in->setProperty ("trim", s.inTrimDb);
+    juce::Array<juce::var> il;
+    for (int l = 0; l < layers; l++)
+    {
+        auto* e = new juce::DynamicObject();
+        e->setProperty ("src", s.srcInput[l]);
+        e->setProperty ("imp", s.impInput[l]);
+        e->setProperty ("gate", s.inGate[l]);
+        e->setProperty ("window", s.inWindow[l]);
+        il.add (juce::var (e));
+    }
+    in->setProperty ("layers", il);
+    o->setProperty ("input", juce::var (in));
     return juce::var (o);
 }
 
@@ -423,6 +480,25 @@ bool fromVar (const juce::var& v, Settings& s, juce::String& err)
         d.presetName = pr["name"].toString().substring (0, 40);
         d.presetKind = pr["kind"].toString() == "U" ? "U" : "F";
         d.dirty = (bool) pr["dirty"];
+    }
+    // 1.2.0 (absent in 1.1.0 states: those keep the 1.1.0 behaviour, bit for bit)
+    const int ver = (int) num (v, "v", 1);
+    d.legacyWobble = ver < 2 ? true : (bool) v["legacyWobble"];
+    d.shape = juce::jlimit ((int) pathCircle, (int) pathDrawn, (int) num (v, "shape", d.path != pathHold ? (float) d.path : (float) pathCircle));
+    d.puckDrift = juce::jlimit (0.0f, 1.0f, num (v, "puckDrift", 0.0f));
+    const auto in = v["input"];
+    if (in.isObject())
+    {
+        d.inTrimDb = juce::jlimit (-inTrimRange, inTrimRange, num (in, "trim", 0.0f));
+        if (const auto* il = in["layers"].getArray())
+            for (int l = 0; l < layers && l < il->size(); l++)
+            {
+                const auto& e = (*il)[l];
+                d.srcInput[l] = (bool) e["src"];
+                d.impInput[l] = (bool) e["imp"];
+                d.inGate[l] = (int) num (e, "gate", 0.0f) ? 1 : 0;
+                d.inWindow[l] = windowFromChoice (num (e, "window", 0.25f));
+            }
     }
     s = d;
     return true;
@@ -674,16 +750,8 @@ bool fromXml (const juce::XmlElement& x, Settings& s, juce::StringArray& problem
 }
 
 // ------------------------------------------------------------------------------ user presets ---
-juce::File userFolder()
-{
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Vintage Chonk").getChildFile ("orbit");
-}
-juce::File droppedFolder()
-{
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Vintage Chonk").getChildFile ("samples");
-}
+juce::File userFolder() { return mfm1::PresetStore::dataFolder ("orbit"); }
+juce::File droppedFolder() { return mfm1::PresetStore::dataFolder ("samples"); }
 
 juce::var userPresetList()
 {
@@ -742,10 +810,11 @@ namespace {
 struct P
 {
     Settings s;
-    explicit P (const char* name)
+    explicit P (const char* name, bool legacy = true)
     {
         s.presetName = name;
         s.presetKind = "F";
+        s.legacyWobble = legacy;           // the 1.1.0 factory presets (17-24) sound exactly as they did
         for (int l = 0; l < layers; l++)
         {
             s.src[l].kind = Src::off;
@@ -819,6 +888,7 @@ struct P
     void orbit (int path, bool sync, float rate, float spread, float wobble, int dir = 0)
     {
         s.path = path; s.sync = sync; s.rate = rate; s.spread = spread;
+        if (path != pathHold) s.shape = path;
         G (MFO_P_ORBIT_WOBBLE) = wobble; G (MFO_P_ORBIT_DIR) = (float) dir;
     }
     void fx (int i, float amt) { s.fxOn[i] = true; s.fxAmt[i] = amt; }
@@ -1100,8 +1170,107 @@ Settings rustedSatellite()
     return p.s;
 }
 
+// ---- 1.2.0 presets (programs 25+): held puck (a fixed blend, macros sweep it by hand), live INPUT
+// the input presets need audio on the sidechain bus; without it they are quiet by design (silence in, silence out)
+void handPuck (P& p, int kx, int ky)
+{
+    // macro kx sweeps the puck X by +-0.75 around the held point, macro ky the Y (macro at 0.5 = the held point)
+    // (a mod adds amount x macro x range: 0.375 x 0..1 x 2 = 0..0.75, so the set point sits 0.375 lower)
+    if (kx >= 0) { p.macro (kx, "PUCK X", 0.5f); p.mod (MFO_MS_MACRO1 + kx, MFO_P_PUCK_X, 0.375f); p.G (MFO_P_PUCK_X) -= 0.375f; }
+    if (ky >= 0) { p.macro (ky, "PUCK Y", 0.5f); p.mod (MFO_MS_MACRO1 + ky, MFO_P_PUCK_Y, 0.375f); p.G (MFO_P_PUCK_Y) -= 0.375f; }
+}
+
+Settings inputSpringThroat()
+{
+    // the input is the impulse: a REGOLITH pad convolved with what arrives on the sidechain (a voice, drums,
+    // a guitar), and the input itself through a spring on layer 2
+    P p ("INPUT - SPRING THROAT", false);
+    p.synth (0, "Velvet Pad", "THROAT PAD");
+    p.s.impInput[0] = true;
+    p.s.inWindow[0] = 0.25f;
+    p.matrix (0, 0.9f, 0.25f, 0.0f, 0.35f, 0.0f);
+    p.filter (0, LADDER, 4200.0f, 0.2f);
+    p.amp (0, 0.02f, 1.0f, 1.0f, 1.2f);
+    p.L (0, MFO_L_LEVEL) = 1.2f;
+    p.s.srcInput[1] = true;
+    p.s.layerName[1] = "SPRING IN";
+    p.gen (1, MFO_GEN_SPRING, 2.5f, 13).damp = 0.35f;
+    p.matrix (1, 0.7f, 0.0f, 0.0f, 0.0f, 0.0f);
+    p.L (1, MFO_L_LEVEL) = 0.7f;
+    p.nodes (-0.7f, 0.6f, 0.7f, 0.6f, 0.0f, -0.75f, -0.7f, -0.7f);
+    p.puck (-0.35f, 0.55f);                  // mostly the pad, some spring
+    p.orbit (pathHold, false, 0.3f, 0.5f, 0.0f);
+    p.s.shape = pathCircle;
+    p.G (MFO_P_DRIFT) = 0.1f;
+    p.fx (5, 0.25f);                         // TWIN TANK (the spring is the layer's BODY)
+    handPuck (p, 0, 1);
+    p.macro (2, "THROAT", 0.5f); p.mod (MFO_MS_MACRO3, MFO_LPARAM (0, MFO_L_MOTION), 0.5f);
+    p.G (MFO_P_MASTER) = 0.3f;               // about -19 dBFS RMS on the host test's demo sidechain
+    return p.s;
+}
+
+Settings inputHaloFollower()
+{
+    // the input plays through a bowed-metal halo (THRU), and a pad follows its spectrum (TONE) and loudness
+    // (MOTION) with the input as the modulator
+    P p ("INPUT - HALO FOLLOWER", false);
+    p.s.srcInput[0] = true;
+    p.s.layerName[0] = "HALO";
+    p.gen (0, MFO_GEN_BOWED_METAL, 4.0f, 21).gain = 0.75f;
+    p.matrix (0, 0.75f, 0.0f, 0.0f, 0.0f, 0.0f);
+    p.filter (0, SVF_HP, 160.0f, 0.1f);
+    p.synth (1, "Silk Strings", "FOLLOWER");
+    p.s.impInput[1] = true;
+    p.matrix (1, 0.0f, 0.8f, 0.2f, 0.6f, 0.0f);
+    p.amp (1, 0.3f, 1.0f, 1.0f, 2.0f);
+    p.L (1, MFO_L_LEVEL) = 1.2f;
+    p.nodes (-0.7f, 0.6f, 0.7f, 0.6f, 0.0f, -0.75f, -0.7f, -0.7f);
+    p.puck (0.0f, 0.6f);                     // between the halo and the follower
+    p.orbit (pathHold, false, 0.3f, 0.5f, 0.0f);
+    p.s.shape = pathCircle;
+    p.G (MFO_P_DRIFT) = 0.15f;
+    p.fx (2, 0.3f); p.fx (5, 0.35f);
+    handPuck (p, 0, 1);
+    p.macro (2, "FOLLOW", 0.5f); p.mod (MFO_MS_MACRO3, MFO_LPARAM (1, MFO_L_TONE), 0.4f);
+    p.G (MFO_P_MASTER) = 1.2f;                // about -19 dBFS RMS on the host test's demo sidechain
+    return p.s;
+}
+
+Settings parkedTwinField()
+{
+    // a held blend of a plate pad and pitched glass strings: no motion; MACRO 1 / 2 move the puck by hand
+    P p ("PARKED - TWIN FIELD", false);
+    p.synth (0, "Velvet Pad", "PLATE PAD");
+    p.gen (0, MFO_GEN_PLATE, 3.0f, 8);
+    p.matrix (0, 0.85f, 0.1f, 0.0f, 0.0f, 0.0f);
+    p.amp (0, 0.6f, 1.0f, 1.0f, 2.4f);
+    p.synth (1, "Silk Strings", "GLASS STRINGS");
+    p.gen (1, MFO_GEN_GLASS, 3.0f, 3);
+    p.matrix (1, 0.3f, 0.3f, 0.0f, 0.0f, 0.6f);
+    p.L (1, MFO_L_TUNE) = 12.0f;
+    p.L (1, MFO_L_LEVEL) = 0.7f;
+    p.amp (1, 0.9f, 1.0f, 1.0f, 2.8f);
+    p.synth (2, "Night Wind", "WIND");
+    p.gen (2, MFO_GEN_FORMANT_VOX, 3.0f, 5);
+    p.matrix (2, 0.0f, 0.9f, 0.3f, 0.0f, 0.0f);
+    p.L (2, MFO_L_SCAN_RATE) = 0.4f;
+    p.amp (2, 1.0f, 1.0f, 1.0f, 3.0f);
+    p.nodes (-0.7f, 0.6f, 0.7f, 0.6f, 0.0f, -0.75f, 0.0f, 0.05f);
+    p.puck (0.0f, 0.3f);
+    p.orbit (pathHold, false, 0.3f, 0.6f, 0.0f);
+    p.s.shape = pathCircle;
+    p.G (MFO_P_DRIFT) = 0.3f;
+    p.fx (1, 0.2f); p.fx (2, 0.3f); p.fx (5, 0.4f);
+    handPuck (p, 0, 1);
+    p.macro (2, "GRAVITY", 0.5f); p.mod (MFO_MS_MACRO3, MFO_P_BLEND_SHARP, 0.4f);
+    p.G (MFO_P_MASTER) = 0.112f;              // about -19 dBFS RMS (host test score)
+    return p.s;
+}
+
 using Maker = Settings (*)();
-const Maker makers[] = { rustedSatellite, bowedHalo, tapeChoir, springRain, woodMarimba, liveDrone, motionChop, threeBody };
+// 0-7: the 1.1.0 presets (programs 17-24, unchanged); 8+: 1.2.0 (programs 25+)
+const Maker makers[] = { rustedSatellite, bowedHalo, tapeChoir, springRain, woodMarimba, liveDrone, motionChop, threeBody,
+                         inputSpringThroat, inputHaloFollower, parkedTwinField };
 }
 
 int factoryCount() { return (int) (sizeof (makers) / sizeof (makers[0])); }

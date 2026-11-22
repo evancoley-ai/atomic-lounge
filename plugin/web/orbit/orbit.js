@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk ORBIT panel (plugin): direction B "Streamline Lounge" made interactive.
+// Atomic Lounge (formerly Vintage Chonk) ORBIT panel (plugin): direction B "Streamline Lounge" made interactive.
 // Layout and drawing follow the design mock-up (1600 x 1000, scaled to the window).
 // Bridge: window.__JUCE__.backend.emitEvent('mfm1', {op, a}) with ops "o.*" (plugin/src/PluginEditor.cpp,
 // PluginProcessor::orbitOp); the plugin calls window.ORB.state / values / views / meter / toast.
@@ -40,6 +40,24 @@
   let HV = [];              // host parameter values, normalised
   let CORE = [];            // core parameter info [{name,min,max,def,int,log}]
   const hostIdx = new Map(); // target (core id or special) -> host index
+  const hostId = new Map();  // host parameter id ('orbit_motion', ...) -> host index (1.2.0 parameters are found by id)
+  const hid = (id) => (hostId.has(id) ? hostId.get(id) : -1);
+  const hval = (id, d) => { const i = hid(id); return i < 0 || HV[i] == null ? d : HV[i]; };
+  function hostSet(id, n) { const i = hid(id); if (i < 0) return false; HV[i] = n; send('o.host', [i, n]); return true; }
+  // live input (sidechain) and orbit motion: the host parameters lead (DAW automation), the settings are the fallback
+  function inL(i) {
+    if (!S) return { src: false, imp: false, gate: 0, window: 0.25 };
+    if (!S.input) S.input = { trim: 0, layers: [] };
+    if (!S.input.layers) S.input.layers = [];
+    while (S.input.layers.length < 3) S.input.layers.push({ src: false, imp: false, gate: 0, window: 0.25 });
+    return S.input.layers[i];
+  }
+  const srcIn = (i) => hval(`orbit_l${i + 1}_src_input`, inL(i).src ? 1 : 0) > 0.5;
+  const impIn = (i) => hval(`orbit_l${i + 1}_imp_input`, inL(i).imp ? 1 : 0) > 0.5;
+  const gateOf = (i) => (hval(`orbit_l${i + 1}_input_gate`, inL(i).gate ? 1 : 0) > 0.5 ? 1 : 0);
+  const shapeOf = () => (S && S.shape >= 1 && S.shape <= 3 ? S.shape : S && S.path ? S.path : 1);
+  const motionOn = () => hval('orbit_motion', S && S.path ? 1 : 0) > 0.5;
+  const trimDb = () => -24 + 48 * hval('orbit_input_trim', S && S.input ? (S.input.trim + 24) / 48 : 0.5);
   const widgets = [];       // everything with update()
   let scale = 1;
 
@@ -68,6 +86,7 @@
 
   function rateText(n) {
     if (S && S.sync) { const b = 64 >> clamp(Math.round(n * 6), 0, 6); return b >= 4 ? (b / 4) + (b === 4 ? ' BAR' : ' BARS') : b + (b === 1 ? ' BEAT' : ' BEATS'); }
+    if (n <= 0.0005) return 'STOP';
     const hz = 0.01 * Math.pow(2000, n);
     return hz < 1 ? (1 / hz).toFixed(1) + ' s' : hz.toFixed(2) + ' Hz';
   }
@@ -83,6 +102,15 @@
       set(n) { const i = hostIdx.get(target); if (i === undefined) return; HV[i] = n; send('o.host', [i, n]); markEdited(); },
       text() { return textFn(this.get()); },
       def: def,
+    };
+  }
+  function idBind(id, textFn, def) {
+    return {
+      target: null,
+      get() { return hval(id, def); },
+      set(n) { if (hostSet(id, n)) markEdited(); },
+      text() { return textFn(this.get()); },
+      def,
     };
   }
   function coreBind(id, textFn, opts) {
@@ -342,11 +370,11 @@
     // walnut header band
     H(`<div class="band" style="${px(0, 0, 1476, 78)}"><canvas class="wood" data-seed="4242"></canvas></div>`);
     H(`<div class="chrome-line" style="${px(0, 78, 1476)}"></div>`);
-    H(`<div class="abs" style="${px(22, 15)}font-size:25px;font-weight:300;letter-spacing:7px;color:#f3e9d2;text-shadow:0 1px 2px rgba(0,0,0,.6)">VINTAGE&thinsp;CHONK</div>`);
+    H(`<div class="abs" style="${px(22, 15)}font-size:25px;font-weight:300;letter-spacing:7px;color:#f3e9d2;text-shadow:0 1px 2px rgba(0,0,0,.6)">ATOMIC&thinsp;LOUNGE</div>`);
     H(`<div class="abs" style="${px(24, 49)}font-size:9px;font-weight:600;letter-spacing:4px;color:rgba(243,233,210,.7)">POLY-CONVOLUTION · ORBIT MODE</div>`);
-    const mode = H(`<div id="modesw" class="abs" style="${px(330, 20, 196, 38)}border-radius:19px;padding:3px;background:linear-gradient(160deg,#fff,#a9aaa9 35%,#f0f0ee 55%,#7f807e 85%,#d9dad8);box-shadow:0 2px 6px rgba(0,0,0,.5)"></div>`);
+    const mode = H(`<div id="modesw" class="abs" style="${px(326, 20, 214, 38)}border-radius:19px;padding:3px;background:linear-gradient(160deg,#fff,#a9aaa9 35%,#f0f0ee 55%,#7f807e 85%,#d9dad8);box-shadow:0 2px 6px rgba(0,0,0,.5)"></div>`);
     H(`<div style="position:relative;height:100%;border-radius:16px;background:linear-gradient(#2a1c12,#140c07);box-shadow:inset 0 2px 5px #000;display:flex">
-      <div class="modeb off" data-m="chonk">CHONK</div><div class="modeb on">ORBIT</div></div>`, mode);
+      <div class="modeb off" data-m="chonk" title="REGOLITH: the wavetable synth">REGOLITH</div><div class="modeb on">ORBIT</div></div>`, mode);
     mode.querySelector('[data-m=chonk]').addEventListener('pointerdown', (e) => { e.preventDefault(); send('o.mode', ['chonk']); });
     const pw = win(body, 556, 16, 470, 46, 23).firstChild;
     hdr.num = nix(pw, 18, 7, '__', true);
@@ -391,7 +419,7 @@
     // source
     const sx = 90;
     H(`<div class="ttl" style="${px(sx + 4, 16)}">SOURCE</div>`, b);
-    Ly.srcPill = pill(b, sx + 104, 11, ['SAMPLE', 'SYNTH'], '', (k) => setSourceKind(i, k === 0 ? 'sample' : 'synth'));
+    Ly.srcPill = pill(b, sx + 74, 11, ['SAMPLE', 'SYNTH', 'INPUT'], 'tight', (k) => setSourceKind(i, ['sample', 'synth', 'input'][k]));
     const sw = win(b, sx, 40, 212, 92, 46); sw.classList.add('wave');
     Ly.srcWin = sw;
     Ly.srcSvg = sv('svg', { viewBox: '0 0 160 80', preserveAspectRatio: 'none', style: 'left:26px;width:160px;top:6px;height:80px' }, sw.firstChild);
@@ -405,7 +433,7 @@
     // impulse
     const ix = 340, iw = 196;
     H(`<div class="ttl" style="${px(ix + 4, 16)}">IMPULSE</div>`, b);
-    Ly.impPill = pill(b, ix + 84, 11, ['SMP', 'SYN', 'LIVE'], '', (k) => setImpulseKind(i, ['sample', 'synth', 'live'][k]));
+    Ly.impPill = pill(b, ix + 78, 11, ['SMP', 'SYN', 'LIVE', 'INPUT'], 'tight', (k) => setImpulseKind(i, ['sample', 'synth', 'live', 'input'][k]));
     const iwn = win(b, ix, 40, iw, 92, 0); iwn.style.borderRadius = '50%'; iwn.classList.add('wave');
     Ly.impWin = iwn;
     Ly.impSvg = sv('svg', { viewBox: '0 0 136 76', preserveAspectRatio: 'none', style: 'left:30px;width:136px;top:8px;height:76px' }, iwn.firstChild);
@@ -499,7 +527,10 @@
   function buildOrbit() {
     const ob = H(`<div class="card" style="${px(1032, 98, 428, 3 * LH + 28)}"></div>`);
     orb.card = ob;
-    H(`<div class="ttl" style="${px(26, 18)}">ORBIT BLENDER</div>`, ob);
+    H(`<div class="ttl" style="${px(26, 18)}">ORBIT</div>`, ob);
+    // MOTION ON / OFF: off = the puck stays exactly where it is put (HOLD); on = it travels the chosen path
+    orb.motion = H(`<div id="motionsw" class="motion clk" style="${px(80, 12)}" title="orbit motion on / off (double-click the field to start, drag the puck to park it)"><i class="jewel"></i><span>MOTION</span><b>OFF</b></div>`, ob);
+    orb.motion.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; e.preventDefault(); setMotion(!motionOn()); });
     orb.pathPill = pill(ob, 182, 13, ['HOLD', 'CIRCLE', 'FIG 8', 'DRAWN'], 'or', (k) => setPath(k));
     const fwin = H(`<div class="abs" style="${px(FX0, FY0, FW, FH)}border-radius:50%;padding:7px;background:conic-gradient(from 200deg,#fff,#8e8f8d 15%,#f4f4f2 30%,#7a7b79 50%,#e9e9e7 66%,#9a9b99 82%,#fff);box-shadow:0 6px 14px rgba(60,40,20,.35),0 1px 2px rgba(60,40,20,.4)"></div>`, ob);
     const fg = H(`<div style="position:relative;width:100%;height:100%;border-radius:50%;overflow:hidden;background:radial-gradient(ellipse at 50% 45%,#2e1e12,#1a110a 55%,#0b0704);box-shadow:inset 0 3px 18px rgba(0,0,0,.95)"></div>`, fwin);
@@ -539,20 +570,22 @@
     // controls
     const oy = 392;
     H(`<div class="rule" style="${px(24, oy, 380)}"></div>`, ob);
-    const ctl = [['RATE', SP.RATE, (n) => rateText(n), 0.35], ['WOBBLE', G.WOBBLE, pct, 0], ['SPREAD', SP.SPREAD, pct, 0.7]];
+    const ctl = [['RATE', SP.RATE, (n) => rateText(n), 0.35], ['WOBBLE', G.WOBBLE, pct, 0], ['SPREAD', SP.SPREAD, pct, 0.7], ['PUCK DRIFT', 'orbit_puck_drift', pct, 0]];
     orb.knobs = ctl.map(([n, t, f, d], k) => {
-      const x = 30 + k * 82;
-      H(`<div class="lbl" style="${px(x - 10, oy + 82, 88)}">${n}</div>`, ob);
-      const txt = H(`<div class="sub c" style="${px(x - 10, oy + 97, 88)}">—</div>`, ob);
-      const bnd = hostBind(t, f, d);
+      const x = 24 + k * 64;
+      H(`<div class="lbl" style="${px(x - 12, oy + 82, 76)}font-size:9px;letter-spacing:1.4px">${n}</div>`, ob);
+      const txt = H(`<div class="sub c" style="${px(x - 12, oy + 97, 76)}">—</div>`, ob);
+      const bnd = typeof t === 'string' ? idBind(t, f, d) : hostBind(t, f, d);
       if (t === SP.RATE) bnd.target = G.RATE;
       if (t === SP.SPREAD) bnd.target = G.SIZE_X;
-      return Knob(ob, x + 6, oy + 18, 56, { ticks: true }, bnd, txt);
+      const kn = Knob(ob, x + 4, oy + 22, 48, { ticks: true }, bnd, txt);
+      if (typeof t === 'string') kn.el.classList.add('puckdrift');
+      return kn;
     });
-    H(`<div class="ttl dim" style="${px(290, oy + 18)}">SYNC</div>`, ob);
-    orb.sync = pill(ob, 290, oy + 32, ['ON', 'FREE'], '', (k) => { S.sync = k === 0; send('o.sync', [S.sync]); markEdited(); updateAll(); });
-    H(`<div class="ttl dim" style="${px(290, oy + 64)}">DIRECTION</div>`, ob);
-    orb.dir = pill(ob, 290, oy + 78, ['CW', 'CCW'], '', (k) => { S.core[G.DIR] = k; send('o.set', [G.DIR, k]); markEdited(); updateAll(); });
+    H(`<div class="ttl dim" style="${px(296, oy + 18)}">SYNC</div>`, ob);
+    orb.sync = pill(ob, 296, oy + 32, ['ON', 'FREE'], '', (k) => { S.sync = k === 0; send('o.sync', [S.sync]); markEdited(); updateAll(); });
+    H(`<div class="ttl dim" style="${px(296, oy + 64)}">DIRECTION</div>`, ob);
+    orb.dir = pill(ob, 296, oy + 78, ['CW', 'CCW'], '', (k) => { S.core[G.DIR] = k; send('o.set', [G.DIR, k]); markEdited(); updateAll(); });
     const wy = oy + 126;
     H(`<div class="rule" style="${px(24, wy, 380)}"></div>`, ob);
     orb.blendT = H(`<div class="ttl dim" style="${px(26, wy + 12)}">BLEND · PUCK X 0.00 Y 0.00</div>`, ob);
@@ -590,7 +623,13 @@
       e.preventDefault();
       s.setPointerCapture(e.pointerId);
       if (node) drag = { node: orb.nodes.indexOf(node) };
-      else if (puck || S.path !== 3) { drag = { puck: true }; const [x, y] = fieldPoint(e); setPuck(x, y); updateField(); }
+      else if (puck || S.path !== 3) {
+        // the puck goes where it is dragged; while the orbit moves, that parks it there (motion off)
+        drag = { puck: true };
+        const [x, y] = fieldPoint(e);
+        if (S.path !== 0) parkPuck(x, y); else setPuck(x, y);
+        updateField();
+      }
       else { ink = [fieldPoint(e)]; s.classList.add('drawing'); }
     });
     s.addEventListener('pointermove', (e) => {
@@ -617,6 +656,44 @@
     };
     s.addEventListener('pointerup', end);
     s.addEventListener('pointercancel', end);
+    // double-click on the field (not a node): the orbit moves again, around where the puck is
+    s.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.node') || assigning) return;
+      e.preventDefault();
+      if (!motionOn()) setMotion(true);
+    });
+  }
+  function parkPuck(x, y) {
+    x = clamp(x, -1, 1); y = clamp(y, -1, 1);
+    const ix = hostIdx.get(G.PUCK_X), iy = hostIdx.get(G.PUCK_Y);
+    HV[ix] = (x + 1) / 2; HV[iy] = (y + 1) / 2;
+    S.path = 0;
+    const mi = hid('orbit_motion'); if (mi >= 0) HV[mi] = 0;
+    send('o.park', [+x.toFixed(4), +y.toFixed(4)]);
+    puckLocal = [x, y]; puckLocalUntil = performance.now() + 250;
+    orb.trailPts.length = 0;
+    markEdited(); updateMotion();
+    toast('PUCK PARKED \u00b7 DOUBLE-CLICK THE FIELD TO ORBIT AGAIN');
+  }
+  function setMotion(on) {
+    if (on) {
+      const k = shapeOf();
+      if (k === 3 && (!S.drawn || S.drawn.length < 3)) { S.shape = 3; S.path = 3; toast('DRAG ON THE SCREEN TO DRAW A LOOP'); }
+      else S.path = k;
+    } else S.path = 0;
+    const mi = hid('orbit_motion'); if (mi >= 0) HV[mi] = on ? 1 : 0;
+    send('o.motion', [!!on]);
+    orb.trailPts.length = 0;
+    markEdited(); updateAll();
+  }
+  function updateMotion() {
+    if (!orb.motion) return;
+    const on = motionOn();
+    orb.motion.classList.toggle('on', on);
+    orb.motion.querySelector('.jewel').classList.toggle('on', on);
+    orb.motion.querySelector('b').textContent = on ? 'ON' : 'OFF';
+    orb.pathPill.setOn(on ? S.path : 0);
+    [...orb.pathPill.children].forEach((b, k) => b.classList.toggle('sel', !on && k === shapeOf()));
   }
   function drawInk(pts) { orb.ink.setAttribute('d', pts.map((p, i) => (i ? 'L' : 'M') + fx2px(p[0]).toFixed(1) + ' ' + fy2px(p[1]).toFixed(1)).join(' ')); }
   function commitDrawn(pts) {
@@ -632,7 +709,8 @@
       out.push([+(pts[j - 1][0] + (pts[j][0] - pts[j - 1][0]) * t).toFixed(3), +(pts[j - 1][1] + (pts[j][1] - pts[j - 1][1]) * t).toFixed(3)]);
     }
     S.drawn = out;
-    S.path = 3;
+    S.path = 3; S.shape = 3;
+    { const mi = hid('orbit_motion'); if (mi >= 0) HV[mi] = 1; }
     send('o.drawn', [out]);
     const cx = out.reduce((a, p) => a + p[0], 0) / out.length, cy = out.reduce((a, p) => a + p[1], 0) / out.length;
     const si = hostIdx.get(SP.SPREAD); HV[si] = 0.7; send('o.host', [si, 0.7]);
@@ -641,7 +719,11 @@
     toast('ORBIT PATH DRAWN');
   }
   function setPath(k) {
+    const mi = hid('orbit_motion');
     if (k === 3 && S.path === 3) { toast('DRAG ON THE SCREEN TO DRAW A NEW LOOP'); return; }
+    if (k) S.shape = k;
+    if (mi >= 0) HV[mi] = k ? 1 : 0;
+    orb.trailPts.length = 0;
     if (k === 3 && (!S.drawn || S.drawn.length < 3)) {
       S.path = 3; send('o.path', [3]); updateAll(); toast('DRAG ON THE SCREEN TO DRAW A LOOP'); return;
     }
@@ -675,8 +757,8 @@
     const cx = coreVal(G.PUCK_X), cy = coreVal(G.PUCK_Y);
     orb.center.setAttribute('transform', `translate(${fx2px(cx).toFixed(1)} ${fy2px(cy).toFixed(1)})`);
     orb.center.style.display = S.path ? '' : 'none';
-    orb.pathPill.setOn(S.path);
-    orb.hint.textContent = S.path === 3 ? 'DRAG ON THE SCREEN TO DRAW A LOOP' : S.path === 0 ? 'DRAG THE PUCK' : 'DRAG TO MOVE THE ORBIT';
+    updateMotion();
+    orb.hint.textContent = S.path === 3 ? 'DRAW A LOOP \u00b7 GRAB THE PUCK TO PARK IT' : S.path === 0 ? 'DRAG THE PUCK \u00b7 DOUBLE-CLICK TO ORBIT' : 'DRAG TO PARK THE PUCK';
     if (!lastMeter) placePuck(cx, cy, [0.25, 0.25, 0.25, 0.25]);
   }
   function placePuck(x, y, w) {
@@ -710,13 +792,13 @@
     H(`<div class="ttl" style="${px(256, 18)}">EFFECTS</div>`, bb);
     H(`<div class="ttl dim" style="${px(352, 19)}">IN SERIES</div>`, bb);
     bot.fx = FXN.map((name, k) => {
-      const x = 252 + k * 126, u = H(`<div class="cup" style="${px(x, 44, 114, 150)}"></div>`, bb);
-      const jw = H(`<div class="jewel btn" style="${px(50, 12)}" title="on / bypass"></div>`, u);
-      const lbl = H(`<div class="lbl" style="${px(0, 104, 114)}font-size:10px">${name}</div>`, u);
-      const sub = H(`<div class="sub c" style="${px(0, 120, 114)}">—</div>`, u);
+      const x = 252 + k * 112, u = H(`<div class="cup" style="${px(x, 44, 104, 150)}border-radius:52px 52px 22px 22px"></div>`, bb);
+      const jw = H(`<div class="jewel btn" style="${px(45, 12)}" title="on / bypass"></div>`, u);
+      const lbl = H(`<div class="lbl" style="${px(0, 104, 104)}font-size:9.5px;letter-spacing:1.6px">${name}</div>`, u);
+      const sub = H(`<div class="sub c" style="${px(0, 120, 104)}">—</div>`, u);
       const bnd = hostBind(SP.FX0 + k, pct, 0.3);
       bnd.target = null;
-      const kn = Knob(u, 27, 34, 60, { ticks: true }, bnd, null);
+      const kn = Knob(u, 22, 34, 60, { ticks: true }, bnd, null);
       jw.addEventListener('pointerdown', (e) => { e.preventDefault(); S.fx.on[k] = !S.fx.on[k]; send('o.fx', [k, S.fx.on[k]]); markEdited(); updateFx(); });
       if (k === 2 || k === 5) { lbl.classList.add('clk'); lbl.title = k === 2 ? 'click: ensemble mode' : 'click: twin tank / spring'; }
       if (k === 3 || k === 4) { sub.classList.add('clk'); sub.title = 'click: tempo sync'; }
@@ -736,6 +818,20 @@
       kn.update = ((orig) => function () { orig.call(this); updateFx(); })(kn.update);
       return { u, jw, lbl, sub, kn };
     });
+    // INPUT: the sidechain (another track's audio) as it arrives, and its trim
+    H(`<div class="vrule" style="${px(934, 20, null, 172)}"></div>`, bb);
+    H(`<div class="ttl" style="${px(946, 18)}">INPUT</div>`, bb);
+    H(`<div class="ttl dim" style="${px(946, 31)}font-size:7.5px;letter-spacing:1.6px">SIDECHAIN</div>`, bb);
+    const im = H(`<div id="inmeter" class="abs" style="${px(950, 48, 58, 72)}border-radius:9px;padding:3px;background:linear-gradient(160deg,#fff,#a9aaa9 35%,#f0f0ee 55%,#7f807e 85%,#d9dad8);box-shadow:0 2px 4px rgba(60,40,20,.35)"></div>`, bb);
+    const imf = H(`<div style="position:relative;width:100%;height:100%;border-radius:6px;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#2e1e12,#120b06);box-shadow:inset 0 2px 5px rgba(0,0,0,.8)"></div>`, im);
+    bot.inBars = [0, 1].map((c) => H(`<div class="inbar" style="${px(10 + c * 20, 6, 12, 54)}"><i></i></div>`, imf));
+    bot.inPeak = H(`<div class="jewel" style="${px(44, 4)}width:8px;height:8px" title="input peak"></div>`, imf);
+    bot.inNone = H(`<div class="abs" style="${px(0, 22, 52)}display:none;text-align:center;font-size:7px;letter-spacing:1px;line-height:9px;font-weight:700;color:rgba(255,190,110,.75)">NO INPUT<br>BUS</div>`, imf);
+    bot.inSub = H(`<div class="sub c" style="${px(938, 122, 82)}font-size:8px">—</div>`, bb);
+    const tt = H(`<div class="sub c" style="${px(938, 180, 82)}">—</div>`, bb);
+    H(`<div class="lbl" style="${px(938, 168, 82)}font-size:8.5px;letter-spacing:1.4px">TRIM</div>`, bb);
+    bot.trim = Knob(bb, 961, 132, 36, {}, idBind('orbit_input_trim', (n) => { const d = -24 + 48 * n; return (d > 0.05 ? '+' : '') + d.toFixed(1) + ' dB'; }, 0.5), tt);
+    bot.trim.el.id = 'intrim';
     H(`<div class="vrule" style="${px(1018, 20, null, 172)}"></div>`, bb);
     H(`<div class="ttl" style="${px(1036, 18)}">MACROS</div>`, bb);
     const asg = H(`<div class="ttl dim clk" style="${px(1140, 19)}" title="modulation slots: sources, targets, amounts">ASSIGN ▾</div>`, bb);
@@ -794,11 +890,15 @@
   }
   function updateLayer(i) {
     const Ly = layers[i], ls = S.layers[i];
-    Ly.srcPill.setOn(ls.src.kind === 'sample' ? 0 : ls.src.kind === 'synth' ? 1 : -1);
-    Ly.impPill.setOn(ls.imp.kind === 'sample' ? 0 : ls.imp.kind === 'synth' ? 1 : ls.imp.kind === 'live' ? 2 : -1);
+    const si = srcIn(i), ii = impIn(i);
+    Ly.srcPill.setOn(si ? 2 : ls.src.kind === 'sample' ? 0 : ls.src.kind === 'synth' ? 1 : -1);
+    Ly.impPill.setOn(ii ? 3 : ls.imp.kind === 'sample' ? 0 : ls.imp.kind === 'synth' ? 1 : ls.imp.kind === 'live' ? 2 : -1);
+    Ly.card.classList.toggle('in-src', si);
+    Ly.card.classList.toggle('in-imp', ii);
     const ft = Math.round(S.core[LP(i, L.FTYPE)]);
     Ly.ftype.innerHTML = FTYPES[ft] + ' &#9662;';
-    Ly.jewel.classList.toggle('on', ls.src.kind !== 'off');
+    Ly.jewel.classList.toggle('on', si || ls.src.kind !== 'off');
+    updateInputLabels(i);
   }
   function updateViews() {
     if (!ST || !ST.views) return;
@@ -819,7 +919,48 @@
       if (v.impTrace) { Ly.impPath.setAttribute('d', tracePath(ip, 136, 76)); Ly.impPath.setAttribute('fill', 'none'); Ly.impPath.setAttribute('stroke', '#ffb347'); Ly.impPath.setAttribute('stroke-width', 1.6); }
       else { Ly.impPath.setAttribute('d', ip.length ? wavePath(ip, 136, 76, true) : ''); Ly.impPath.setAttribute('fill', '#ffb347'); Ly.impPath.setAttribute('stroke', 'none'); }
       Ly.impHint.textContent = ip.length ? '' : (S.layers[i].imp.kind === 'off' ? 'NO IMPULSE' : 'DROP AN IMPULSE HERE');
+      updateInputLabels(i);
     });
+  }
+  // a layer whose source / impulse is the live input: its labels and a rolling level trace in its window
+  // (the plugin's views may say the same; the settings decide when the views have not caught up)
+  function updateInputLabels(i) {
+    const Ly = layers[i];
+    if (!Ly || !S) return;
+    const v = (ST && ST.views && ST.views[i]) || {};
+    const si = srcIn(i), ii = impIn(i);
+    if (si) {
+      Ly.srcName.textContent = 'LIVE INPUT';
+      Ly.srcSub.textContent = 'SIDECHAIN · ' + (gateOf(i) ? 'NOTE GATE' : 'THRU');
+      Ly.srcSub.classList.remove('warn');
+      Ly.srcHint.textContent = inCh === 0 ? 'NO INPUT BUS' : '';
+    } else if (Ly.srcName.textContent === 'LIVE INPUT') {
+      Ly.srcName.textContent = v.srcName || '—'; Ly.srcSub.textContent = v.srcSub || '';
+    }
+    if (ii) {
+      Ly.impName.textContent = 'LIVE INPUT';
+      Ly.impSub.textContent = 'SIDECHAIN · ' + Math.round((inL(i).window || 0.25) * 1000) + ' ms WINDOW';
+      Ly.impSub.classList.remove('warn');
+      Ly.impHint.textContent = inCh === 0 ? 'NO INPUT BUS' : '';
+    } else if (Ly.impName.textContent === 'LIVE INPUT') {
+      Ly.impName.textContent = v.impName || '—'; Ly.impSub.textContent = v.impSub || '';
+    }
+    drawInputTrace(i);
+  }
+  let inCh = -1;                 // input bus channels from the meter (-1 = not known yet)
+  const inHist = [];             // recent input levels (0..1, a dB scale) for the source / impulse windows
+  function drawInputTrace(i) {
+    const Ly = layers[i];
+    if (!Ly) return;
+    const pk = [];
+    for (let k = 0; k < 60; k++) { const v = inHist[inHist.length - 60 + k] || 0; pk.push(-v, v); }
+    if (srcIn(i)) {
+      Ly.srcPath.setAttribute('d', wavePath(pk, 160, 80)); Ly.srcPath.setAttribute('fill', '#ffb347'); Ly.srcPath.setAttribute('stroke', 'none');
+      Ly.srcLine.style.display = '';
+    }
+    if (impIn(i)) {
+      Ly.impPath.setAttribute('d', wavePath(pk, 136, 76)); Ly.impPath.setAttribute('fill', '#ffb347'); Ly.impPath.setAttribute('stroke', 'none');
+    }
   }
   function updateAll() {
     if (!S) return;
@@ -854,15 +995,43 @@
     bot.needleAng += (target - bot.needleAng) * 0.45;
     bot.needle.setAttribute('transform', `rotate(${bot.needleAng.toFixed(1)} 35 52)`);
     bot.peak.classList.toggle('on', Math.max(m.pk[0], m.pk[1]) > 0.89);
+    // input (sidechain): -60..0 dBFS bars, peak lamp, the bus as the plugin reports it
+    if (m.in || m.inCh != null) {
+      const a = m.in || [0, 0, 0], ch = m.inCh == null ? 2 : m.inCh;
+      const lv = (x) => clamp((20 * Math.log10(Math.max(x, 1e-6)) + 60) / 60, 0, 1);
+      bot.inBars.forEach((b, c) => { b.firstChild.style.transform = `scaleY(${(ch ? lv(a[c] || 0) : 0).toFixed(3)})`; });
+      bot.inPeak.classList.toggle('on', ch > 0 && (a[2] || 0) > 0.89);
+      if (ch !== inCh) {
+        inCh = ch;
+        bot.inNone.style.display = ch ? 'none' : '';
+        bot.inBars.forEach((b, c) => { b.style.display = ch === 0 || (ch === 1 && c === 1) ? 'none' : ''; });
+        for (let i = 0; i < 3; i++) updateInputLabels(i);
+      }
+      if (meterTick % 10 === 1) bot.inSub.textContent = ch === 0 ? 'NO INPUT BUS' : (ch === 1 ? 'MONO' : 'STEREO') + ' \u00b7 ' + (20 * Math.log10(Math.max(a[0], a[1] || 0, 1e-6))).toFixed(0).replace('-120', '-inf') + ' dB';
+      inHist.push(ch ? lv(Math.max(a[0], a[1] || 0)) : 0); if (inHist.length > 120) inHist.splice(0, inHist.length - 120);
+      if (meterTick % 2 === 0) for (let i = 0; i < 3; i++) if (srcIn(i) || impIn(i)) drawInputTrace(i);
+    }
     if (m.midi !== lastMidi) { if (lastMidi >= 0) midiFlash = 4; lastMidi = m.midi; }
     hdr.midi.classList.toggle('on', midiFlash > 0 || m.voices > 0);
     if (midiFlash > 0) midiFlash--;
   }
 
   // ------------------------------------------------------------------------------- sources etc ---
+  function setInputFlag(i, which, on) {
+    inL(i)[which] = on;
+    hostSet(`orbit_l${i + 1}_${which}_input`, on ? 1 : 0);
+  }
   function setSourceKind(i, kind) {
     const s = S.layers[i].src;
-    if (s.kind === kind) { openInspector(i, 'src'); return; }
+    if (kind === 'input') {
+      if (srcIn(i)) { openInspector(i, 'src'); return; }
+      setInputFlag(i, 'src', true);
+      markEdited(); updateLayer(i); openInspector(i, 'src');
+      return;
+    }
+    const wasIn = srcIn(i);
+    if (wasIn) setInputFlag(i, 'src', false);
+    if (s.kind === kind && !wasIn) { openInspector(i, 'src'); return; }
     s.kind = kind;
     if (kind === 'sample' && !(s.file && s.file.name) && s.from !== 'print') s.from = 'file';
     send('o.src', [i, { kind, from: s.from }]);
@@ -871,7 +1040,15 @@
   }
   function setImpulseKind(i, kind) {
     const s = S.layers[i].imp;
-    if (s.kind === kind) { openInspector(i, 'imp'); return; }
+    if (kind === 'input') {
+      if (impIn(i)) { openInspector(i, 'imp'); return; }
+      setInputFlag(i, 'imp', true);
+      markEdited(); updateLayer(i); openInspector(i, 'imp');
+      return;
+    }
+    const wasIn = impIn(i);
+    if (wasIn) setInputFlag(i, 'imp', false);
+    if (s.kind === kind && !wasIn) { openInspector(i, 'imp'); return; }
     s.kind = kind;
     if (kind === 'live' && s.live === i) s.live = (i + 1) % 3;
     send('o.imp', [i, { kind, from: s.from, live: s.live }]);
@@ -992,13 +1169,27 @@
     if (which === 'src') {
       H(`<h3>LAYER ${i + 1} · SOURCE</h3>`, o);
       const r = H(`<div class="row"></div>`, o);
-      btn(r, 'OFF', sp.kind === 'off', () => { sp.kind = 'off'; send('o.src', [i, { kind: 'off' }]); markEdited(); updateLayer(i); renderInspector(); });
-      btn(r, 'CHONK SYNTH', sp.kind === 'synth', () => setSourceKind(i, 'synth'));
-      btn(r, 'SAMPLE FILE', sp.kind === 'sample' && sp.from === 'file', () => { sp.kind = 'sample'; sp.from = 'file'; send('o.src', [i, { kind: 'sample', from: 'file' }]); markEdited(); updateLayer(i); renderInspector(); });
-      btn(r, 'CHONK PRINT', sp.kind === 'sample' && sp.from === 'print', () => { sp.kind = 'sample'; sp.from = 'print'; send('o.src', [i, { kind: 'sample', from: 'print' }]); markEdited(); updateLayer(i); renderInspector(); });
+      const si = srcIn(i);
+      const plain = (kind, from) => { if (si) setInputFlag(i, 'src', false); sp.kind = kind; if (from) sp.from = from; send('o.src', [i, from ? { kind, from } : { kind }]); markEdited(); updateLayer(i); renderInspector(); };
+      btn(r, 'OFF', !si && sp.kind === 'off', () => plain('off'));
+      btn(r, 'REGOLITH SYNTH', !si && sp.kind === 'synth', () => { setSourceKind(i, 'synth'); renderInspector(); });
+      btn(r, 'SAMPLE FILE', !si && sp.kind === 'sample' && sp.from === 'file', () => plain('sample', 'file'));
+      btn(r, 'REGOLITH PRINT', !si && sp.kind === 'sample' && sp.from === 'print', () => plain('sample', 'print'));
+      btn(r, 'LIVE INPUT', si, () => { setSourceKind(i, 'input'); renderInspector(); });
       const cols = H(`<div class="cols"></div>`, o), c1 = H(`<div></div>`, cols), c2 = H(`<div></div>`, cols);
-      if (sp.kind === 'synth' || (sp.kind === 'sample' && sp.from === 'print')) {
-        H(`<div class="note">VINTAGE CHONK PRESET${sp.kind === 'sample' ? ' (PRINTED TO A SAMPLE)' : ''}</div>`, c1);
+      if (si) {
+        H(`<div class="note">LIVE INPUT: THE PLUGIN\u2019S SIDECHAIN AUDIO IS THIS LAYER\u2019S SOURCE (ABLETON: SIDECHAIN \u201cAUDIO FROM\u201d \u00b7 MEASURES: \u201cINPUT FROM\u201d \u00b7 STANDALONE: THE AUDIO DEVICE INPUT, UNMUTED IN ITS SETTINGS).</div>`, c1);
+        const gr = H(`<div class="row"><span class="note">GATE</span></div>`, c1);
+        const g = gateOf(i);
+        btn(gr, 'THRU', g === 0, () => { hostSet(`orbit_l${i + 1}_input_gate`, 0); inL(i).gate = 0; markEdited(); updateLayer(i); renderInspector(); });
+        btn(gr, 'NOTE', g === 1, () => { hostSet(`orbit_l${i + 1}_input_gate`, 1); inL(i).gate = 1; markEdited(); updateLayer(i); renderInspector(); });
+        H(`<div class="note">${g ? 'NOTE: THE INPUT SOUNDS WHILE NOTES ARE HELD, SHAPED BY THE LAYER\u2019S AMP ENVELOPE.' : 'THRU: THE INPUT ALWAYS PLAYS; NOTES STILL STEER PITCH.'}</div>`, c1);
+        const ms = H(`<div class="minis"></div>`, c2);
+        mini(ms, 'TRIM', idBind('orbit_input_trim', (n) => { const d = -24 + 48 * n; return (d > 0.05 ? '+' : '') + d.toFixed(1) + ' dB'; }, 0.5));
+        mini(ms, 'PAN', coreBind(LP(i, L.PAN), (v) => (Math.abs(v) < 0.01 ? 'C' : v < 0 ? 'L ' + Math.round(-v * 100) : 'R ' + Math.round(v * 100))));
+        if (g) mini(ms, 'VEL', coreBind(LP(i, L.VEL)));
+      } else if (sp.kind === 'synth' || (sp.kind === 'sample' && sp.from === 'print')) {
+        H(`<div class="note">REGOLITH PRESET${sp.kind === 'sample' ? ' (PRINTED TO A SAMPLE)' : ''}</div>`, c1);
         list(c1, ST.chonk.map((p) => ({ name: p.name.toUpperCase(), k: p.kind === 'U' ? 'USER' : '', on: p.name.toUpperCase() === (sp.patch.name || '').toUpperCase(), p })), (it) => {
           sp.patch = { name: it.p.name, mfp: it.p.mfp || '' };
           send('o.src', [i, { patch: sp.patch }]); markEdited(); renderInspector();
@@ -1023,7 +1214,7 @@
           btn(r2, 'USE', false, () => { sp.root = Math.round(f.detected); send('o.src', [i, { root: sp.root }]); markEdited(); renderInspector(); });
         }
       }
-      if (sp.kind !== 'off') {
+      if (sp.kind !== 'off' && !si) {
         const ms = H(`<div class="minis"></div>`, c2);
         mini(ms, 'TUNE', coreBind(LP(i, L.TUNE), (v) => (v > 0 ? '+' : '') + Math.round(v) + ' st'));
         mini(ms, 'FINE', coreBind(LP(i, L.FINE), (v) => (v > 0 ? '+' : '') + Math.round(v) + ' c'));
@@ -1052,14 +1243,25 @@
     } else {
       H(`<h3>LAYER ${i + 1} · IMPULSE</h3>`, o);
       const r = H(`<div class="row"></div>`, o);
-      const setK = (kind, from) => { sp.kind = kind; if (from) sp.from = from; send('o.imp', [i, { kind, from: sp.from, live: sp.live }]); markEdited(); updateLayer(i); renderInspector(); };
-      btn(r, 'OFF', sp.kind === 'off', () => setK('off'));
-      btn(r, 'FACTORY', sp.kind === 'sample' && sp.from === 'generated', () => setK('sample', 'generated'));
-      btn(r, 'SAMPLE FILE', sp.kind === 'sample' && sp.from === 'file', () => setK('sample', 'file'));
-      btn(r, 'CHONK PRINT', sp.kind === 'synth', () => setK('synth'));
-      btn(r, 'LIVE LAYER', sp.kind === 'live', () => { if (sp.live === i) sp.live = (i + 1) % 3; setK('live'); });
+      const ii = impIn(i);
+      const setK = (kind, from) => { if (ii) setInputFlag(i, 'imp', false); sp.kind = kind; if (from) sp.from = from; send('o.imp', [i, { kind, from: sp.from, live: sp.live }]); markEdited(); updateLayer(i); renderInspector(); };
+      btn(r, 'OFF', !ii && sp.kind === 'off', () => setK('off'));
+      btn(r, 'FACTORY', !ii && sp.kind === 'sample' && sp.from === 'generated', () => setK('sample', 'generated'));
+      btn(r, 'SAMPLE FILE', !ii && sp.kind === 'sample' && sp.from === 'file', () => setK('sample', 'file'));
+      btn(r, 'REGOLITH PRINT', !ii && sp.kind === 'synth', () => setK('synth'));
+      btn(r, 'LIVE LAYER', !ii && sp.kind === 'live', () => { if (sp.live === i) sp.live = (i + 1) % 3; setK('live'); });
+      btn(r, 'LIVE INPUT', ii, () => { setImpulseKind(i, 'input'); renderInspector(); });
       const cols = H(`<div class="cols"></div>`, o), c1 = H(`<div></div>`, cols), c2 = H(`<div></div>`, cols);
-      if (sp.kind === 'sample' && sp.from === 'generated') {
+      if (ii) {
+        H(`<div class="note">LIVE INPUT: THE SIDECHAIN AUDIO IS THIS LAYER\u2019S IMPULSE. BODY CONVOLVES WITH THE LAST WINDOW OF INPUT (REFRESHED CONTINUOUSLY, CROSS-FADED); TONE \u00b7 GRAIN \u00b7 MOTION \u00b7 PITCH FOLLOW THE INPUT AS IT PLAYS.</div>`, c1);
+        const wr = H(`<div class="row"><span class="note">WINDOW</span></div>`, c1);
+        const cur = inL(i).window || 0.25;
+        [0.1, 0.25, 0.5, 1.0].forEach((w) => btn(wr, Math.round(w * 1000) + ' MS', Math.abs(cur - w) < 1e-3, () => {
+          inL(i).window = w; send('o.window', [i, w]); markEdited(); updateLayer(i); renderInspector();
+        }));
+        const ms = H(`<div class="minis"></div>`, c2);
+        mini(ms, 'TRIM', idBind('orbit_input_trim', (n) => { const d = -24 + 48 * n; return (d > 0.05 ? '+' : '') + d.toFixed(1) + ' dB'; }, 0.5));
+      } else if (sp.kind === 'sample' && sp.from === 'generated') {
         H(`<div class="note">FACTORY IMPULSES (GENERATED, LICENCE-CLEAN)</div>`, c1);
         list(c1, ST.gens.map((g, k) => ({ name: g, on: k === sp.gen, k: k })), (it) => { sp.gen = it.k; send('o.imp', [i, { gen: sp.gen }]); markEdited(); renderInspector(); });
         const rr = H(`<div class="row"></div>`, c1);
@@ -1076,7 +1278,7 @@
         stepper(r2, 'ROOT', () => sp.root, (v) => { sp.root = clamp(v, 0, 127); send('o.imp', [i, { root: sp.root }]); markEdited(); renderInspector(); });
         if (f.detected != null && f.detected >= 0) btn(r2, 'DETECTED ' + noteName(f.detected), false, () => { sp.root = Math.round(f.detected); send('o.imp', [i, { root: sp.root }]); markEdited(); renderInspector(); });
       } else if (sp.kind === 'synth') {
-        H(`<div class="note">VINTAGE CHONK PRESET (PRINTED AS THE IMPULSE)</div>`, c1);
+        H(`<div class="note">REGOLITH PRESET (PRINTED AS THE IMPULSE)</div>`, c1);
         list(c1, ST.chonk.map((p) => ({ name: p.name.toUpperCase(), k: p.kind === 'U' ? 'USER' : '', on: p.name.toUpperCase() === (sp.patch.name || '').toUpperCase(), p })), (it) => {
           sp.patch = { name: it.p.name, mfp: it.p.mfp || '' }; send('o.imp', [i, { patch: sp.patch }]); markEdited(); renderInspector();
         });
@@ -1090,7 +1292,7 @@
         const rr = H(`<div class="row"></div>`, c1);
         [0, 1, 2].filter((k) => k !== i).forEach((k) => btn(rr, 'LAYER ' + (k + 1), sp.live === k, () => { sp.live = k; send('o.imp', [i, { live: k }]); markEdited(); renderInspector(); }));
       }
-      if (sp.kind === 'sample' || sp.kind === 'synth') {
+      if (!ii && (sp.kind === 'sample' || sp.kind === 'synth')) {
         H(`<div class="note" style="margin-top:6px">SHAPE</div>`, c2);
         const ms = H(`<div class="minis"></div>`, c2);
         mini(ms, 'START', specBind(i, 'imp', 'start', 0, 4, secText, 'sq'));
@@ -1105,7 +1307,7 @@
         toggleCore(t, 'KEYTRACK', LP(i, L.KEYTRACK));
         toggleCore(t, 'SCAN LOOP', LP(i, L.SCAN_LOOP));
       }
-      if (sp.kind !== 'off') {
+      if (!ii && sp.kind !== 'off') {
         H(`<div class="note" style="margin-top:6px">STREAM (TONE · GRAIN · MOTION · PITCH)</div>`, c2);
         const m2 = H(`<div class="minis"></div>`, c2);
         mini(m2, 'SCAN RATE', coreBind(LP(i, L.SCAN_RATE), (v) => (v < 0.001 ? 'FREEZE' : v.toFixed(2) + 'x')));
@@ -1165,7 +1367,7 @@
     const go = () => { const n = inp.value.trim(); if (!n) return; send('o.save', [n]); closeOverlays(); toast('SAVED ' + n.toUpperCase()); };
     btn(r, 'SAVE', false, go, 'or');
     inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') go(); if (e.key === 'Escape') closeOverlays(); });
-    H(`<div class="note">%APPDATA%\\VINTAGE CHONK\\ORBIT · SAMPLES EMBEDDED UP TO 24 MB EACH</div>`, o);
+    H(`<div class="note">%APPDATA%\\ATOMIC LOUNGE\\ORBIT · SAMPLES EMBEDDED UP TO 24 MB EACH</div>`, o);
     setTimeout(() => { inp.focus(); inp.select(); }, 0);
   }
   function renameMacro(k) {
@@ -1240,8 +1442,9 @@
       if (!st || !st.settings) return;
       const reopen = inspector;
       ST = st; S = st.settings; HV = st.hostValues.slice(); CORE = st.core;
-      hostIdx.clear();
-      st.host.forEach((h, i) => hostIdx.set(h.target, i));
+      hostIdx.clear(); hostId.clear();
+      st.host.forEach((h, i) => { hostIdx.set(h.target, i); hostId.set(h.id, i); });
+      if (!S.shape) S.shape = S.path || 1;
       if (!body.__built) { build(); body.__built = true; document.querySelectorAll('canvas.wood').forEach((c, i) => wood(c, +(c.dataset.seed || 1234 + i * 777))); }
       S.mods = S.mods || [];
       updateAll();
@@ -1253,8 +1456,16 @@
     },
     values(map) {
       if (!S) return;
-      for (const k in map) HV[+k] = map[k];
+      let layersMoved = false;
+      for (const k in map) {
+        HV[+k] = map[k];
+        const h = ST.host[+k];
+        if (!h) continue;
+        if (h.id === 'orbit_motion') { S.path = map[k] > 0.5 ? shapeOf() : 0; orb.trailPts.length = 0; }
+        if (/^orbit_l\d_(src_input|imp_input|input_gate)$/.test(h.id)) layersMoved = true;
+      }
       widgets.forEach((w) => w.update());
+      if (layersMoved) { for (let i = 0; i < 3; i++) updateLayer(i); if (inspector) renderInspector(); }
       updateField();
       hdr.drift.classList.toggle('on', HV[hostIdx.get(G.DRIFT)] > 0.001);
     },

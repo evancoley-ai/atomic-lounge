@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Vintage Chonk VST3 (Windows x64): configure + build with the Visual Studio 2022 Build Tools' own CMake
-# and Ninja, Release. Output: plugin\dist\Vintage Chonk.vst3 (a VST3 bundle folder). Nothing is installed.
+﻿# SPDX-License-Identifier: AGPL-3.0-only
+# Atomic Lounge (formerly Vintage Chonk) VST3 (Windows x64): configure + build with the Visual Studio 2022 Build Tools' own CMake
+# and Ninja, Release. Output: plugin\dist\Atomic Lounge.vst3 (a VST3 bundle folder). Nothing is installed.
 # Runs plugin\fetch_deps.ps1 first (JUCE + WebView2 SDK at pinned, checked versions; the JUCE patch).
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1            # plugin
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test      # plugin + host test, then run it
@@ -13,7 +13,7 @@ param([switch]$Test, [switch]$Clean, [switch]$NoScreenshot, [switch]$Dev)
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $repo = Split-Path $here -Parent
-$name = 'Vintage Chonk'
+$name = 'Atomic Lounge'     # PRODUCT_NAME (formerly Vintage Chonk; the plugin IDs are unchanged)
 $bt = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
 $cmake = "$bt\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 $ninja = "$bt\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
@@ -51,6 +51,8 @@ $clangclFwd = $clangcl -replace '\\', '/'
 
 $build = if ($Dev) { "$here\build-dev" } else { "$here\build" }
 if ($Clean -and (Test-Path $build)) { Remove-Item -Recurse -Force $build }
+# JUCE writes the Windows version resource only on the first configure; drop stale ones so name/version follow CMakeLists.txt
+Get-ChildItem $build -Recurse -Filter '*_resources.rc' -ErrorAction SilentlyContinue | Remove-Item -Force
 & $cmake -S $here -B $build -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninja" -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl "-DMFE_CLANG_CL=$clangclFwd"
 if ($LASTEXITCODE) { throw 'configure failed' }

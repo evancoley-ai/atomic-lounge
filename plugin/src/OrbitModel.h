@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk plugin, ORBIT mode: the settings model (what a preset / the plugin state holds), the source
+// Atomic Lounge plugin (formerly Vintage Chonk), ORBIT mode: the settings model (what a preset / the plugin state holds), the source
 // and impulse specs the worker builds from, and the curated host-automatable parameter set.
 // Message-thread objects; the audio side is OrbitRunner.
 #pragma once
@@ -113,20 +113,36 @@ struct Settings
     std::array<ModSlot, MFO_NMOD> mods {};
     juce::String presetName = "INIT", presetKind = "F";
     bool dirty = false;
+    // 1.2.0
+    int shape = pathCircle;               // the moving path that ORBIT Motion turns on (path = pathHold while off)
+    float puckDrift = 0.0f;               // wobble of a held puck (host param orbit_puck_drift)
+    bool legacyWobble = false;            // 1.1.0 states and presets: ORBIT WOBBLE moves a held puck, RATE 0 creeps
+    float inTrimDb = 0.0f;                // live input trim, -24..+24 dB
+    bool srcInput[layers] {}, impInput[layers] {};   // the layer's SOURCE / IMPULSE is the live input
+    int inGate[layers] {};                // SOURCE INPUT: 0 THRU, 1 NOTE
+    float inWindow[layers] { 0.25f, 0.25f, 0.25f };  // IMPULSE INPUT: BODY window, seconds
 
     Settings();                           // core at the engine defaults, a usable init sound
 };
 
 // --------------------------------------------------------------------------- host parameters ---
 enum class Map { lin, sq2, log, special };
-enum Special { spRate = 1000, spSpread, spTapeAge, spFx0, spMacro0 = spFx0 + numFx };
+enum Special { spRate = 1000, spSpread, spTapeAge, spFx0, spMacro0 = spFx0 + numFx,
+               // 1.2.0 (appended: the existing host indices stay)
+               spMotion = spMacro0 + numMacros, spPuckDrift, spInTrim, spSrcIn0, spImpIn0 = spSrcIn0 + layers,
+               spGate0 = spImpIn0 + layers };
+constexpr float inTrimRange = 24.0f;                   // ORBIT Input Trim: -24..+24 dB
+inline float inTrimDbFromNorm (float v) { return (v * 2.0f - 1.0f) * inTrimRange; }
+inline float windowFromChoice (float s) { return s <= 0.17f ? 0.1f : s <= 0.37f ? 0.25f : s <= 0.75f ? 0.5f : 1.0f; }
 struct HostParam
 {
     juce::String id, name;
     int target;                           // core id, or Special
     Map map;
+    bool stepped = false;                 // on / off (VST3 step count 1)
 };
-const std::vector<HostParam>& hostParams();           // the curated set (42)
+const std::vector<HostParam>& hostParams();           // the curated set (42 in 1.1.0, 54 from 1.2.0)
+int hostIndexForSpecial (int special);                // -1 if none
 int hostIndexForCore (int coreId);                    // -1 if the core param is not host-automatable
 float hostNormFromSettings (const HostParam& h, const Settings& s);
 void hostNormToSettings (const HostParam& h, float v, Settings& s);

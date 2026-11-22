@@ -1,17 +1,21 @@
-# Vintage Chonk VST3 and standalone (Windows)
+# Atomic Lounge VST3 and standalone (Windows)
 
-The Vintage Chonk synth as a VST3 instrument for any Windows DAW and as a standalone app: the `dsp/` engine
-(16 voices, desktop effect sizes) and the web panel (the same files as the Android tablet app) in a WebView2
-window, plus the second engine ORBIT (poly-convolution, `dsp/orbit/`, its own panel `web/orbit/`). Product
-"Vintage Chonk", vendor "Coley", version 1.1.0, VST3 category Instrument|Synth, MIDI in, stereo out (mono
-offered), no audio in. The build makes `plugin\dist\Vintage Chonk.vst3` and `plugin\dist\Vintage Chonk.exe`
-(JUCE standalone wrapper: Options -> Audio/MIDI Settings).
+**Atomic Lounge (formerly Vintage Chonk)**: the synth as a VST3 instrument for any Windows DAW and as a
+standalone app. Two engines: REGOLITH (the `dsp/` engine, called CHONK up to 1.1.0; 16 voices, desktop effect
+sizes; the web panel, the same files as the Android tablet app, in a WebView2 window) and ORBIT
+(poly-convolution, `dsp/orbit/`, its own panel `web/orbit/`). Product "Atomic Lounge", vendor "Coley",
+version 1.2.0, VST3 category Instrument|Synth, MIDI in, stereo out (mono offered), one stereo audio input
+"Sidechain" (input bus 0, VST3 aux, mono accepted, active by default; used by ORBIT's INPUT). The build makes
+`plugin\dist\Atomic Lounge.vst3` and `plugin\dist\Atomic Lounge.exe` (JUCE standalone wrapper: Options ->
+Audio/MIDI Settings; the input starts muted). The VST3 class IDs (manufacturer `Cly1`, plugin `Mfm1`), the
+parameter IDs and the state format are unchanged by the rename, so projects made with Vintage Chonk 1.0.0 /
+1.1.0 and Measures find and load it as before.
 
 ## Build
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File plugin\fetch_deps.ps1              # JUCE + WebView2 SDK (pinned, checked)
-powershell -ExecutionPolicy Bypass -File plugin\build.ps1                   # -> plugin\dist\Vintage Chonk.vst3
+powershell -ExecutionPolicy Bypass -File plugin\build.ps1                   # -> plugin\dist\Atomic Lounge.vst3
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test             # + host test (opens the editor ~10 s)
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Test -NoScreenshot   # host test without a window
 powershell -ExecutionPolicy Bypass -File plugin\build.ps1 -Dev -Test        # development build -> plugin\dist-dev
@@ -49,12 +53,14 @@ Not installed by the build. Copy the bundle into the common VST3 folder from an 
 repository folder:
 
 ```powershell
-Copy-Item -Recurse -Force "plugin\dist\Vintage Chonk.vst3" "C:\Program Files\Common Files\VST3\"
+Copy-Item -Recurse -Force "plugin\dist\Atomic Lounge.vst3" "C:\Program Files\Common Files\VST3\"
 ```
 
-then rescan plugins in the DAW. User presets are kept in `%APPDATA%\Vintage Chonk\presets\*.mfp`; presets saved
-by earlier builds under the old name (`%APPDATA%\Vintage Chonk\presets`) are copied there once, never
-overwriting a preset of the same name.
+then rescan plugins in the DAW (remove an older `Vintage Chonk.vst3` from that folder: same plugin, old name).
+User presets are kept in `%APPDATA%\Atomic Lounge\presets\*.mfp`, ORBIT presets in `%APPDATA%\Atomic Lounge\orbit`,
+dropped samples in `%APPDATA%\Atomic Lounge\samples`. While a new folder does not exist, the old
+`%APPDATA%\Vintage Chonk\...` one is read instead; nothing is moved or deleted. The editor's WebView2 data is in
+`%LOCALAPPDATA%\Atomic Lounge\WebView2\<host exe name>`, one folder per host program.
 
 ## How it works
 
@@ -64,7 +70,7 @@ overwriting a preset of the same name.
 | Processor: parameters, state, programs, tempo, the panel's patch diffing | `src/PluginProcessor.*`, `src/Params.h` |
 | Editor: WebBrowserComponent (WebView2), panel files from binary data, events | `src/PluginEditor.*` |
 | The panel's native bridge on the desktop + computer keyboard + browser keys off | `web/desktop_shim.js` |
-| User presets `%APPDATA%\Vintage Chonk\presets\*.mfp` (+ one-time copy from the old folder) | `src/PresetStore.*` |
+| User presets `%APPDATA%\Atomic Lounge\presets\*.mfp` (old `Vintage Chonk` folder read while the new one is missing) | `src/PresetStore.*` |
 | Factory bank as host programs (generated from the panel's `js/factory.js`) | `tools/gen_factory.mjs` -> `generated/factory_presets.h` |
 
 **Audio.** The engine renders 128-frame blocks at 44.1 kHz on demand into a ring; a 64-tap Kaiser windowed-sinc
@@ -100,20 +106,20 @@ The tablet-only "hold the title for Android settings" does nothing here.
 
 The second engine, the poly-convolution ORBIT (`docs/ORBIT_MODE.md`, core `dsp/orbit/`, API `dsp/include/mfo.h`).
 Development builds: `plugin\build.ps1 -Dev [-Test]` builds into `plugin\build-dev` and copies the bundle to
-`plugin\dist-dev\Vintage Chonk.vst3` (the release `plugin\dist` is untouched).
+`plugin\dist-dev\Atomic Lounge.vst3` (the release `plugin\dist` is untouched).
 
 | Part | File |
 |---|---|
 | Mode switch, cross-fade, latency, ORBIT state / panel ops | `src/PluginProcessor.*` |
 | Engine host: worker-built assets, mailboxes + retire ring, MIDI-split render, EXT/macro feeds, drawn path, tape age | `src/OrbitRunner.*`, `src/TripleBuffer.h` |
 | Settings, 42 host parameters, JSON / XML state with embedded audio, decoding, root key (YIN), factory + user presets | `src/OrbitModel.*` |
-| The Vintage Chonk effects at 44.1 kHz on the host-rate ORBIT bus | `src/FxChain.*` |
+| The REGOLITH effects at 44.1 kHz on the host-rate ORBIT bus | `src/FxChain.*` |
 | The panel (direction B "Streamline Lounge") | `web/orbit/orbit.html`, `orbit.css`, `orbit.js` |
 | Preset level / render tool (development) | `tools/orbit_tool.cpp` (target `VintageChonkOrbitTool`) |
 
-* **Mode** CHONK | ORBIT: the switch in either panel's header (CHONK panel: the foot bar, added by the desktop
+* **Mode** REGOLITH | ORBIT (CHONK | ORBIT up to 1.1.0; state value still `chonk`): the switch in either panel's header (REGOLITH panel: the foot bar, added by the desktop
   shim). Saved in the state (`mode` attribute). Switching cross-fades the engines (30 ms, equal power) and
-  reports the new latency to the host. CHONK is the 1.0.0 engine, unchanged (tested bit-identical after a trip
+  reports the new latency to the host. REGOLITH is the 1.0.0 engine, unchanged (tested bit-identical after a trip
   through ORBIT). The ORBIT engine is created the first time it is wanted.
 * **Engine** at the host rate, 3 layers x 16 voices (synth layers: MFE_MAX_VOICES 16, as the tablet). Sources,
   impulses, synth prints, shaped IRs, BODY kernels and keytrack sets are built on a worker thread, handed over
@@ -136,27 +142,90 @@ Development builds: `plugin\build.ps1 -Dev [-Test]` builds into `plugin\build-de
   steady part (editable). In the state by path **and** embedded (FLAC 24-bit, or WAV for odd rates) up to
   24 MB each; bigger files are kept by path only. Reopening: embedded audio first, then the path; if neither,
   the layer shows MISSING and the rest plays. Files dropped on the panel are read in the page, sent in chunks
-  and kept in `%APPDATA%\Vintage Chonk\samples` (so they also have a path); LOAD FILE opens a Windows dialog.
-* **Presets**: 8 factory presets (only generated impulses and Chonk presets as synths or prints); user presets
-  `%APPDATA%\Vintage Chonk\orbit\*.orbit` (XML, samples embedded within the cap). Host programs: 0-15 the 16
-  CHONK factory presets (as in 1.0.0), 16-23 the ORBIT ones as "ORBIT - <name>"; choosing one switches the mode
+  and kept in `%APPDATA%\Atomic Lounge\samples` (so they also have a path); LOAD FILE opens a Windows dialog.
+* **Presets**: factory presets (only generated impulses and REGOLITH presets as synths or prints, and the live input in the INPUT presets); user presets
+  `%APPDATA%\Atomic Lounge\orbit\*.orbit` (XML, samples embedded within the cap). Host programs: 0-15 the 16
+  REGOLITH factory presets (as in 1.0.0), 16-23 the 1.1.0 ORBIT ones and 24 and up the 1.2.0 ones as "ORBIT - <name>"; choosing one switches the mode
   (the state keeps the CHONK program in `program`, as 1.0.0, and the ORBIT one in `orbitProgram`; a 1.0.0 state
   loads as CHONK, unchanged: tested with a real 1.0.0 state, `tests/fixtures/state_1.0.0_program7_macro2.bin`).
   Levels: each preset's output is set (with `tools/orbit_tool.cpp`) to about -19 dBFS RMS on its demo score,
   peaks at or below -1.5 dBFS also on a plain C chord (SPRING RAIN, peak-limited, about -23.5 dBFS RMS).
   Renders: `examples/orbit/presets/*.wav` (written by the host test, through the VST3, not normalised).
 
+## 1.2.0 (development, 21 Nov 2026)
+
+* **Rename**: Atomic Lounge (formerly Vintage Chonk); the CHONK mode is REGOLITH on every user-facing surface
+  (mode switch REGOLITH | ORBIT, "REGOLITH PRINT", "REGOLITH preset"). Internal names, the state tag
+  `VINTAGECHONK`, the `mode="chonk"` state value, parameter IDs and the class IDs are kept: a 1.1.0 project
+  saved in CHONK mode loads as REGOLITH and renders bit-identically.
+* **WebView2 fix** (`src/PluginEditor.*`): the user data folder used to be one folder for every process, so a
+  running standalone owned the WebView2 browser process and a DAW's editor never got one (Ableton Live 10:
+  sound, no panel). Now `%LOCALAPPDATA%\Atomic Lounge\WebView2\<host exe name>`, shared by all instances inside
+  one host. If WebView2 environment or controller creation fails, the editor shows a plain JUCE message with
+  the reason and the HRESULT and a Retry button instead of a blank window.
+* **Sidechain input**: one stereo audio input bus "Sidechain" (input bus 0, VST3 type aux via
+  `VST3ClientExtensions::getPluginHasMainInput() == false`, stereo or mono, default-active). Measures feeds the
+  first aux input bus; Ableton Live and other DAWs route it as the plug-in sidechain ("Audio From"). An absent,
+  disabled or silent input gives silence (non-finite samples are zeroed). REGOLITH ignores it.
+* **ORBIT INPUT**: INPUT as a layer's SOURCE (GATE THRU, the default, or NOTE through the layer's amp envelope)
+  or IMPULSE. BODY: true convolution with a continuously captured window of the input (100 / 250 / 500 /
+  1000 ms, default 250 ms); a new kernel about every 6720 samples (140 ms at 48 kHz), built incrementally on the audio thread without
+  allocation into the idle one of two convolvers that both hear the whole input history, then a 2048-sample
+  cross-fade; kernels at unit energy with a floor, so silence gives silence. TONE / GRAIN / PITCH / MOTION: the
+  input is the live modulator (as LIVE). INPUT meter and TRIM (-24..+24 dB).
+* **Held orbit**: MOTION ON / OFF next to CIRCLE / FIG 8 / DRAWN; dragging a moving puck parks it (motion off),
+  double-clicking the field restarts it; RATE at its minimum (free) = stop, no creep; WOBBLE moves only a moving
+  puck; a held puck moves only with PUCK DRIFT (default 0). States from 1.1.0 keep the old behaviour (wobble
+  moved a held puck). ORBIT Puck X / Y move the parked puck (smoothed); the panel follows automation.
+* **New host parameters** (appended, so the 1.1.0 indices are unchanged): ORBIT Motion, ORBIT Puck Drift,
+  ORBIT Input Trim, ORBIT L1-L3 Source Input, ORBIT L1-L3 Impulse Input, ORBIT L1-L3 Input Gate.
+* **New factory presets** (programs 25 and up): INPUT - SPRING THROAT, INPUT - HALO FOLLOWER, and held-puck
+  presets with a macro on the puck. Programs 1-24 are unchanged.
+* **Standalone**: the audio device's input channels feed the sidechain; muted by default (JUCE's
+  "Mute audio input") to avoid feedback.
+* **Tests 1.2.0** (dev build, 21 Nov 2026): host test 161/0 (incl. 1.1.0 states bit-identical against the released
+  1.1.0 bundle, all 2146 1.1.0 parameter ids kept, WebView2 per-host folder with two editors in one host + a second host +
+  the fallback), panel test 64/0, Steinberg validator 47/0 (`plugin/validator_log_dev_1.2.0.txt`), ORBIT core 157/0 +
+  live input 40/0 (`tests/orbit/test_orbit_input.c`), Measures `inst_input` checker: input bus 0 fed, the output changes
+  with the input for BODY, TONE, MOTION and SOURCE setups.
+
+## Tests (22 Nov 2026, release 1.2.0)
+
+* Release build: clean build of the public tree (`plugin\build.ps1 -Clean -Test`, log
+  `plugin/clean_public_build_log_1.2.0.txt`); bundle and standalone exe copied to `plugin\dist`. Windows version
+  resource of both: ProductName "Atomic Lounge", FileVersion 1.2.0, CompanyName "Coley"; the VST3 factory URL is
+  the source repository.
+* `VintageChonkHostTest`: 161 passed, 0 failed with the released 1.1.0 bundle as the reference (`--ref`; 1.1.0
+  states bit-identical, all 1.1.0 parameter ids kept); 159 passed, 0 failed without it (a fresh clone: the 1.1.0
+  states are checked on the saved fixtures). 27 host programs (16 REGOLITH + 11 ORBIT), 78 visible parameters
+  (22 + 54 + Bypass, Program).
+* `test_panel_desktop.mjs`: 64 passed, 0 failed.
+* Steinberg validator on the release bundle: 47 passed, 0 failed (`plugin/validator_log_release_1.2.0.txt`).
+* `run_tests.ps1` of the public tree: ALL TESTS PASSED (engine 631 + 631, sequencer 65, ORBIT core 157, live input
+  40, converter, panel 297) (`plugin/run_tests_log_1.2.0.txt`).
+* The 11 ORBIT preset renders of the clean build are bit-identical to `examples/orbit/presets/*.flac`.
+
 ## Tests (20 Nov 2026, release 1.1.0)
 
-* `VintageChonkHostTest`: 122 passed, 0 failed (the 1.0.0 checks plus ORBIT: effects wrapper delay exact and
-  reported at 44.1 / 48 / 96 kHz; core + effects latency (347 samples at 48 kHz); no allocation on the ORBIT
-  audio thread; mode switch through the state with the latency reported; CHONK after ORBIT bit-identical to a
-  fresh instance; click-free cross-fade; state round trip with an embedded sample after the file is deleted;
-  missing-sample fallback; ORBIT automation; 24 host programs (ORBIT 17-24 switch the mode); a real 1.0.0
-  project state loads as CHONK and renders bit-identically; every ORBIT factory preset peaks at or below -1 dBFS).
+* Release build: clean build of the public tree (`plugin\build.ps1 -Clean -Test`, log
+  `plugin/clean_public_build_log_1.1.0.txt`); bundle and standalone exe copied to `plugin\dist`.
+* `VintageChonkHostTest`: 122 passed, 0 failed (the 1.0.0 checks, version 1.1.0, plus ORBIT: the effects
+  wrapper is an exact reported delay with everything off at 44.1 / 48 / 96 kHz and rings with everything on;
+  core + effects latency; no allocation on the ORBIT audio thread across MIDI, panel notes and an impulse swap;
+  block sizes on the 64 grid bit-identical, 1000 within 91 dB; CPU; YIN root key; 42 host parameters; mode switch
+  through the state with the latency reported (104 -> 347 -> 104 at 48 kHz); CHONK after ORBIT bit-identical to
+  a fresh instance; click-free cross-fade; state round trip with an embedded sample after the file is deleted;
+  the missing-sample fallback; ORBIT cutoff / output / puck automation; 24 host programs (16 CHONK + 8 "ORBIT -
+  <name>"), each ORBIT program switches the mode, loads, plays at or below -1 dBFS and survives the state; a real
+  1.0.0 state (`tests/fixtures/state_1.0.0_program7_macro2.bin`, saved by the 1.0.0 bundle) loads as CHONK program 7
+  with its macro, also into an instance playing ORBIT, and renders exactly as program 7 chosen by hand; the 8 factory
+  presets through the VST3 at or below -1 dBFS and their WAVs; the ORBIT editor in the running plugin).
+* Cross-version: the same 1.0.0 project state rendered by the 1.0.0 and the 1.1.0 binaries (pedalboard host):
+  bit-identical.
 * `test_panel_desktop.mjs`: 48 passed, 0 failed (24 CHONK + 24 ORBIT panel checks with real mouse / keyboard).
-* Steinberg validator on the release `Vintage Chonk.vst3`: 47 passed, 0 failed.
-* CPU, 48 kHz / 256, three layers, five-note chords, effects on: about 9-11 % of one core.
+* Steinberg validator on the release bundle: 47 passed, 0 failed (`plugin/validator_log_release_1.1.0.txt`).
+* `run_tests.ps1` of the public tree: ALL TESTS PASSED, with the ORBIT core tests 157/0 (`plugin/run_tests_log_1.1.0.txt`).
+* CPU, 48 kHz / 256, three layers, five-note chords, effects on: 8.6-11.2 % of one core (11.4 % through the VST3).
 
 ## Tests (18 Nov 2026, release 1.0.0)
 
@@ -175,7 +244,7 @@ Development builds: `plugin\build.ps1 -Dev [-Test]` builds into `plugin\build-de
 
 ## Licences
 
-* Vintage Chonk code: AGPL-3.0-only in the public source tree (`LICENSE`); a distributed plugin binary is
+* Atomic Lounge code: AGPL-3.0-only in the public source tree (`LICENSE`); a distributed plugin binary is
   AGPLv3 because it links JUCE under AGPLv3, so it must come with (or offer) its complete source.
 * JUCE 8: AGPLv3 (with the patch above), and the third-party code inside JUCE listed in `NOTICE`.
 * Steinberg VST3 SDK (inside JUCE, and the validator): MIT. VST is a trademark of Steinberg Media Technologies GmbH.

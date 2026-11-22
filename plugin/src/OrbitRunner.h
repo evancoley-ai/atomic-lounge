@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk plugin, ORBIT mode: hosts the ORBIT core (dsp/orbit, mfo.h) inside the plugin.
+// Atomic Lounge plugin (formerly Vintage Chonk), ORBIT mode: hosts the ORBIT core (dsp/orbit, mfo.h) inside the plugin.
 //
 //  * the engine is created at the host rate (prepare); its latency (STFT, mfo_latency_samples) plus the
 //    effect wrapper's (FxChain) is what the plugin reports in ORBIT mode;
@@ -9,6 +9,9 @@
 //    and is freed on the worker, never on the audio thread;
 //  * render calls are split at MIDI event offsets and at least every 64 samples (the host-fed modulation
 //    sources EXT1-8 / MACRO1-4 / wheel / aftertouch and the drawn orbit path update there);
+//  * the live input (the sidechain bus, 1.2.0) goes in alongside: copied, cleaned (NaN / Inf -> 0, +-4 clamp),
+//    trimmed in the core; layers use it as SOURCE / IMPULSE when their host flags say so (ORBIT Lx Source / Impulse
+//    Input); the motion switch, puck drift and the stopped orbit (RATE 0) come from the host parameters too;
 //  * after the engine: master TAPE AGE (a gentle roll-off; the saturation is the core's DRIVE) and the
 //    Vintage Chonk effects (FxChain).
 // The audio path never allocates, locks or waits.
@@ -76,7 +79,8 @@ public:
 
     void setCore (int id, float v);      // a core parameter's set value (not the host-automated ones)
     float core (int id) const { return coreVal[(size_t) id].load (std::memory_order_relaxed); }
-    void setPath (int mode, bool sync, const DrawnPath& p);
+    void setPath (int shape, bool sync, const DrawnPath& p);   // shape = the moving path; ORBIT Motion turns it on
+    void setExtras (bool legacyWobble, const float window[layers]);
     void setFx (const bool on[numFx], int ensMode, int revType, int bbdSync, int oilSync);
     void setMods (const std::array<ModSlot, MFO_NMOD>& m);
     void requestSource (int layer, const SourceSpec& s);
@@ -86,12 +90,14 @@ public:
     // ---- audio thread ----------------------------------------------------------------------------
     void setHostNorm (int hostIndex, float v) { if (hostIndex >= 0 && hostIndex < 64) hostNorm[hostIndex] = v; }
     void setTransport (double bpm, bool playing, double ppq);
-    void process (float* left, float* right, int n, const mfm1::MidiEvent* events, int numEvents);
+    // inL / inR: the sidechain input (nullptr = none; inR nullptr = mono), n frames
+    void process (float* left, float* right, const float* inL, const float* inR, int n, const mfm1::MidiEvent* events, int numEvents);
+    void process (float* left, float* right, int n, const mfm1::MidiEvent* events, int numEvents) { process (left, right, nullptr, nullptr, n, events, numEvents); }
     void reset();
 
     // any thread
     void postMidi (const uint8_t* m, int n);
-    struct Meter { float cpu, puckX, puckY, w[4], vuL, vuR, peakL, peakR; unsigned voices; };
+    struct Meter { float cpu, puckX, puckY, w[4], vuL, vuR, peakL, peakR; unsigned voices; float inL, inR, inPk; int inCh; };
     Meter meter() const;
     LayerView view (int layer) const;
     int viewSerial() const { return viewCount.load(); }
@@ -105,7 +111,7 @@ private:
     void applyImpulse (int l, ImpulseAsset* a);
     void retire (Asset* a);
     void updateControls (double dt);
-    void renderSpan (float* l, float* r, int n);
+    void renderSpan (float* l, float* r, const float* il, const float* ir, int n);
     void handleMidi (const uint8_t* b, int n);
 
     // worker
@@ -149,7 +155,11 @@ private:
     float applied[numCore] {};
     bool appliedValid = false;
     float hostNorm[64] {};
-    std::atomic<int> pathMode { pathHold };
+    std::atomic<int> pathMode { pathCircle };     // the shape
+    std::atomic<bool> legacy { false };
+    std::array<std::atomic<float>, layers> inWin {};
+    int hMotion = -1, hDrift = -1, hTrim = -1, hSrcIn[layers] {}, hImpIn[layers] {}, hGate[layers] {};
+    struct InState { int src = -1, imp = -1, gate = -1; float win = -1.0f; } inApplied[layers];
     std::atomic<bool> syncOn { false };
     mfm1::TripleBuffer<DrawnPath> drawnBuf;
     mfm1::TripleBuffer<std::array<ModSlot, MFO_NMOD>> modBuf;
@@ -186,6 +196,9 @@ private:
     // meters
     std::atomic<float> mCpu { 0 }, mPx { 0 }, mPy { 0 }, mW[4] {}, mVuL { 0 }, mVuR { 0 }, mPkL { 0 }, mPkR { 0 };
     std::atomic<unsigned> mVoices { 0 };
+    std::atomic<float> mInL { 0 }, mInR { 0 }, mInPk { 0 };
+    std::atomic<int> mInCh { 0 };
+    float inVuL = 0, inVuR = 0, inPk = 0, inGain = 1.0f;
     std::atomic<uint32_t> midiIn { 0 };
     float vuL = 0, vuR = 0, pkL = 0, pkR = 0, cpuAvg = 0;
 };

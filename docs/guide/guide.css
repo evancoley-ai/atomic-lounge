@@ -1,4 +1,4 @@
-/* Vintage Chonk user guide: print stylesheet (US Letter). Colours from firmware/ui/theme.h
+/* Atomic Lounge user guide: print stylesheet (US Letter). Colours from firmware/ui/theme.h
  * (docs/art/THEME.md), lightened for paper: cream page, aubergine ink, the 70s stripe. */
 @import url(fonts/fonts_local.css);
 :root {
@@ -10,7 +10,7 @@
 }
 @page { size: Letter; margin: 0.7in 0.75in 0.75in 0.75in; background: #fdf7ea;
   @bottom-center { content: counter(page); font: 700 9pt 'Nunito', sans-serif; color: #8a6a70; }
-  @top-right { content: "Vintage Chonk \00b7  User Guide"; font: 400 8pt 'Nunito', sans-serif; color: #b09090; }
+  @top-right { content: "Atomic Lounge \00b7  User Guide"; font: 400 8pt 'Nunito', sans-serif; color: #b09090; }
 }
 @page cover { margin: 0; background: #1e1022; @bottom-center { content: none; } @top-right { content: none; } }
 @page part { margin: 0; background: #1e1022; @bottom-center { content: none; } @top-right { content: none; } }

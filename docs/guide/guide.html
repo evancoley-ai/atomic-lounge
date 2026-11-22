@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Vintage Chonk User Guide</title>
+<title>Atomic Lounge User Guide</title>
 <link rel="stylesheet" href="guide.css">
 </head>
 <body>
@@ -10,22 +10,22 @@
 <!-- ============================================================== COVER === -->
 <section class="cover">
   <div class="sun"></div>
-  <h1>VINTAGE<br><span>CHONK</span></h1>
+  <h1>ATOMIC<br><span>LOUNGE</span></h1>
   <div class="sub">How to use it: on Windows, on the FM-1 and on an Android tablet</div>
   <div class="stripe"><div style="background:#fa882c"></div><div style="background:#f2c02e"></div><div style="background:#a4c440"></div><div style="background:#30baac"></div></div>
   <div class="art"><!--INCLUDE panel--></div>
-  <div class="foot"><b>Vintage Chonk</b> is free, open-source synthesizer software: three classic oscillators, two filters,
+  <div class="foot"><b>Atomic Lounge</b> is free, open-source synthesizer software: three classic oscillators, two filters,
   four envelopes, four LFO / Performer / Stepper modulators, eight macros and six vintage effects.
-  It runs on Windows (VST3 plugin and standalone app, version 1.1.0, with the ORBIT poly-convolution engine),
+  It runs on Windows (VST3 plugin and standalone app, version 1.2.0, with the REGOLITH synth and the ORBIT poly-convolution engine),
   on the M-VAVE FM-1 keyboard (as replacement firmware) and on Android tablets (as an app).
-  User guide, 20 November 2026. Free software: GPL-3.0 (firmware, app), AGPL-3.0 (Windows VST3 and standalone).</div>
+  User guide, 22 November 2026. Free software: GPL-3.0 (firmware, app), AGPL-3.0 (Windows VST3 and standalone).</div>
 </section>
 
 <!-- =========================================================== CONTENTS === -->
 <section class="toc">
 <h2 class="chapter" style="break-before:auto">Contents</h2>
 <div class="toc-part">GETTING STARTED</div>
-<a class="toc-row" href="#what"><span class="n">1</span><span class="ti">What Vintage Chonk is</span><span class="dots"></span><span class="pg" data-for="what"></span></a>
+<a class="toc-row" href="#what"><span class="n">1</span><span class="ti">What Atomic Lounge is</span><span class="dots"></span><span class="pg" data-for="what"></span></a>
 <div class="toc-part">PART 1 &middot; THE SOUND ENGINE (FM-1 AND TABLET)</div>
 <a class="toc-row" href="#flow"><span class="n">2</span><span class="ti">How a sound is made</span><span class="dots"></span><span class="pg" data-for="flow"></span></a>
 <a class="toc-row" href="#osc"><span class="n">3</span><span class="ti">Oscillators, mod oscillator and noise</span><span class="dots"></span><span class="pg" data-for="osc"></span></a>
@@ -47,7 +47,7 @@
 <a class="toc-row" href="#tabpanel"><span class="n">17</span><span class="ti">The tablet panel</span><span class="dots"></span><span class="pg" data-for="tabpanel"></span></a>
 <a class="toc-row" href="#tabplay"><span class="n">18</span><span class="ti">Playing the tablet</span><span class="dots"></span><span class="pg" data-for="tabplay"></span></a>
 <div class="toc-part">PART 4 &middot; ON WINDOWS: VST3, STANDALONE AND ORBIT</div>
-<a class="toc-row" href="#win"><span class="n">19</span><span class="ti">Vintage Chonk on Windows</span><span class="dots"></span><span class="pg" data-for="win"></span></a>
+<a class="toc-row" href="#win"><span class="n">19</span><span class="ti">Atomic Lounge on Windows</span><span class="dots"></span><span class="pg" data-for="win"></span></a>
 <a class="toc-row" href="#orbit"><span class="n">20</span><span class="ti">ORBIT: the idea</span><span class="dots"></span><span class="pg" data-for="orbit"></span></a>
 <a class="toc-row" href="#dims"><span class="n">21</span><span class="ti">The five dimensions</span><span class="dots"></span><span class="pg" data-for="dims"></span></a>
 <a class="toc-row" href="#blender"><span class="n">22</span><span class="ti">The orbit blender</span><span class="dots"></span><span class="pg" data-for="blender"></span></a>
@@ -55,24 +55,28 @@
 <a class="toc-row" href="#orbitpresets"><span class="n">24</span><span class="ti">The ORBIT factory presets</span><span class="dots"></span><span class="pg" data-for="orbitpresets"></span></a>
 <a class="toc-row" href="#samples"><span class="n">25</span><span class="ti">Samples, projects and latency</span><span class="dots"></span><span class="pg" data-for="samples"></span></a>
 <a class="toc-row" href="#organic"><span class="n">26</span><span class="ti">Tips for organic sound design</span><span class="dots"></span><span class="pg" data-for="organic"></span></a>
+<a class="toc-row" href="#input"><span class="n">27</span><span class="ti">Live input: other tracks through ORBIT</span><span class="dots"></span><span class="pg" data-for="input"></span></a>
 <div class="toc-part">PART 5 &middot; SHARED TOOLS AND REFERENCE</div>
-<a class="toc-row" href="#convert"><span class="n">27</span><span class="ti">Converting Massive presets</span><span class="dots"></span><span class="pg" data-for="convert"></span></a>
-<a class="toc-row" href="#midi"><span class="n">28</span><span class="ti">MIDI</span><span class="dots"></span><span class="pg" data-for="midi"></span></a>
-<a class="toc-row" href="#trouble"><span class="n">29</span><span class="ti">Troubleshooting</span><span class="dots"></span><span class="pg" data-for="trouble"></span></a>
-<a class="toc-row" href="#qref"><span class="n">30</span><span class="ti">Quick-reference card (FM-1)</span><span class="dots"></span><span class="pg" data-for="qref"></span></a>
-<a class="toc-row" href="#credits"><span class="n">31</span><span class="ti">Credits, licences and trademarks</span><span class="dots"></span><span class="pg" data-for="credits"></span></a>
+<a class="toc-row" href="#convert"><span class="n">28</span><span class="ti">Converting Massive presets</span><span class="dots"></span><span class="pg" data-for="convert"></span></a>
+<a class="toc-row" href="#midi"><span class="n">29</span><span class="ti">MIDI</span><span class="dots"></span><span class="pg" data-for="midi"></span></a>
+<a class="toc-row" href="#trouble"><span class="n">30</span><span class="ti">Troubleshooting</span><span class="dots"></span><span class="pg" data-for="trouble"></span></a>
+<a class="toc-row" href="#qref"><span class="n">31</span><span class="ti">Quick-reference card (FM-1)</span><span class="dots"></span><span class="pg" data-for="qref"></span></a>
+<a class="toc-row" href="#credits"><span class="n">32</span><span class="ti">Credits, licences and trademarks</span><span class="dots"></span><span class="pg" data-for="credits"></span></a>
 
 <div class="callout note" style="margin-top:18pt"><span class="t">How to read this guide</span>
-Part 1 explains the sound engine, which is the same on the FM-1, on the tablet and in CHONK mode on Windows. Parts 2 and 3 show
+Part 1 explains the sound engine, which is the same on the FM-1, on the tablet and in REGOLITH mode on Windows. Parts 2 and 3 show
 the controls of each. Part 4 covers the Windows plugin and app and their second engine, ORBIT. Panel buttons are shown like <span class="btn">HOME</span>, knobs like
 <span class="knob">PRESETS</span>, words on the FM-1 screen like <span class="scr">SLOT 01</span> and tablet
 controls like <span class="tab">MATRIX</span>.</div>
 </section>
 
 <!-- ================================================================ 1 === -->
-<h2 class="chapter" id="what"><span class="num">1</span>What Vintage Chonk is</h2>
-<p class="lede" style="margin-bottom:6pt">A warm, modern-classic synthesizer you can play on two kinds of hardware. Its layout follows a
-famous wavetable soft synth's way of working; its sound and looks come from 1970s analogue instruments.</p>
+<h2 class="chapter" id="what"><span class="num">1</span>What Atomic Lounge is</h2>
+<p class="lede" style="margin-bottom:6pt"><b>Atomic Lounge (formerly Vintage Chonk)</b> is a warm, modern-classic synthesizer you can play on
+two kinds of hardware and on Windows. Its layout follows a
+famous wavetable soft synth's way of working; its sound and looks come from 1970s analogue instruments. On Windows the synthesizer
+is called <b>REGOLITH</b>, the steady ground under ORBIT, its second engine. The FM-1 firmware and the Android app have not been renamed
+yet: their screens, install pages and app list still say <i>Vintage Chonk</i>, and this guide quotes them as they are.</p>
 
 <div class="grid2" style="font-size:9.6pt;line-height:1.4">
 <div>
@@ -111,7 +115,7 @@ famous wavetable soft synth's way of working; its sound and looks come from 1970
 </div>
 
 <div class="callout warn"><span class="t">Before you start</span>
-Installing Vintage Chonk on the FM-1 replaces M-VAVE's firmware and everything stored by it. Back up first with
+Installing the firmware on the FM-1 replaces M-VAVE's firmware and everything stored by it. Back up first with
 M-VAVE's own tools, and read chapter 9 to the end, including the recovery section.</div>
 
 <!-- ============================================================ PART 1 === -->
@@ -261,7 +265,7 @@ Switching keeps the data of the other kinds, so nothing is lost.</p>
 </tbody></table>
 <h3>Performer</h3>
 <p>Sixteen steps. Each step has a <b>shape</b> (one of 32 curves: rises, falls, ramps, bumps, holds and more; shapes 1-16
-recreate a classic soft-synth Performer library and 17-32 are Vintage Chonk's own) and a <b>level</b> (&minus;100 to +100).
+recreate a classic soft-synth Performer library and 17-32 are Atomic Lounge's own) and a <b>level</b> (&minus;100 to +100).
 <b>Loop start</b> and <b>loop end</b> choose which steps play. Rate (one step per cycle), sync, key sync and unipolar work as on the LFO.</p>
 <h3>Stepper</h3>
 <p>Sixteen <b>values</b> (&minus;100 to +100) played in turn, with <b>glide</b> between steps and the same loop, rate and sync controls:
@@ -411,9 +415,9 @@ Holding OCT&minus; and OCT+ at power-on did not reach the download mode on the d
 
 <!-- =============================================================== 10 === -->
 <h2 class="chapter" id="tour"><span class="num">10</span>Panel tour</h2>
-<figure><!--INCLUDE panel--><figcaption>The FM-1 panel under Vintage Chonk. Yellow words above the upper key row: what each key opens while SEL or EDIT is held. Numbers on the lower row: key numbers used in this guide.</figcaption></figure>
+<figure><!--INCLUDE panel--><figcaption>The FM-1 panel under the Atomic Lounge firmware. Yellow words above the upper key row: what each key opens while SEL or EDIT is held. Numbers on the lower row: key numbers used in this guide.</figcaption></figure>
 <table>
-<thead><tr><th>Control</th><th>In Vintage Chonk</th></tr></thead>
+<thead><tr><th>Control</th><th>With this firmware</th></tr></thead>
 <tbody>
 <tr><td class="k">MASTER</td><td>Headphone and line volume of the whole instrument.</td></tr>
 <tr><td class="k">KNOB1-KNOB4</td><td>The four values in the tiles across the top of the screen, left to right.</td></tr>
@@ -913,42 +917,48 @@ There is no undo and no step sequencer on the tablet, and no on-screen tempo: sy
 </section>
 
 <!-- =============================================================== 19 === -->
-<h2 class="chapter" id="win"><span class="num">19</span>Vintage Chonk on Windows</h2>
-<p class="lede">On Windows, Vintage Chonk is a VST3 instrument for your DAW and a standalone app. Both have two engines:
-<b>CHONK</b>, the synthesizer described in Part 1, and <b>ORBIT</b>, the poly-convolution engine of the next chapters.</p>
+<h2 class="chapter" id="win"><span class="num">19</span>Atomic Lounge on Windows</h2>
+<p class="lede">On Windows, Atomic Lounge is a VST3 instrument for your DAW and a standalone app. Both have two engines:
+<b>REGOLITH</b>, the synthesizer described in Part 1, and <b>ORBIT</b>, the poly-convolution engine of the next chapters.</p>
 <figure><img class="tablet" src="img/orbit/plugin_window.jpg"><figcaption>The plugin window in ORBIT mode, captured from the running plugin (factory preset RUSTED SATELLITE).</figcaption></figure>
 <h3>What is in the download</h3>
 <table>
 <thead><tr><th>File</th><th>What it is</th></tr></thead>
 <tbody>
-<tr><td class="k">Vintage Chonk.vst3</td><td>The VST3 plugin (a folder). For any DAW that loads VST3 instruments on Windows 10 or 11 (64-bit).</td></tr>
-<tr><td class="k">Vintage Chonk.exe</td><td>The standalone app: the same instrument in its own window, no DAW needed.</td></tr>
-<tr><td class="k">Vintage-Chonk-User-Guide.pdf</td><td>This guide.</td></tr>
+<tr><td class="k">Atomic Lounge.vst3</td><td>The VST3 plugin (a folder). For any DAW that loads VST3 instruments on Windows 10 or 11 (64-bit).</td></tr>
+<tr><td class="k">Atomic Lounge.exe</td><td>The standalone app: the same instrument in its own window, no DAW needed.</td></tr>
+<tr><td class="k">Atomic-Lounge-User-Guide.pdf</td><td>This guide.</td></tr>
 <tr><td class="k">LICENSE, RELEASE-NOTES.txt</td><td>The licence (AGPL-3.0) and what is new in this version. The checksums of the download are in RELEASE.txt next to it on the release page.</td></tr>
 </tbody></table>
 <h3>Installing</h3>
 <ol class="steps">
-<li><b>Plugin:</b> copy the whole <code>Vintage Chonk.vst3</code> folder into <code>C:\Program Files\Common Files\VST3\</code> (Windows asks for administrator rights), then let your DAW rescan its plugins. Vintage Chonk appears as an instrument by <b>Coley</b>.</li>
-<li><b>Standalone:</b> put <code>Vintage Chonk.exe</code> anywhere and double-click it. Click <span class="tab">Options</span> at the top of its window, choose <b>Audio/MIDI Settings</b>, and pick your audio output and your MIDI keyboard. The app remembers them.</li>
-<li>Both use Microsoft's WebView2 to draw the panel. It is part of Windows 10 and 11; if a panel stays blank, install the "WebView2 Runtime" from Microsoft.</li>
+<li><b>Plugin:</b> copy the whole <code>Atomic Lounge.vst3</code> folder into <code>C:\Program Files\Common Files\VST3\</code> (Windows asks for administrator rights), then let your DAW rescan its plugins. Atomic Lounge appears as an instrument by <b>Coley</b>.
+If you installed an earlier build as <code>Vintage Chonk.vst3</code>, delete that folder: the new one replaces it, and projects that used it find the new
+one (the plugin's identity is unchanged), with their sound as it was.</li>
+<li><b>Standalone:</b> put <code>Atomic Lounge.exe</code> anywhere and double-click it. Click <span class="tab">Options</span> at the top of its window, choose <b>Audio/MIDI Settings</b>, and pick your audio output and your MIDI keyboard. The app remembers them.</li>
+<li>Both use Microsoft's WebView2 to draw the panel. It is part of Windows 10 and 11. Each program that hosts Atomic Lounge (your DAW, the
+standalone app) keeps its own WebView2 folder, <code>%LOCALAPPDATA%\Atomic Lounge\WebView2\&lt;program name&gt;</code>, so the standalone app and a DAW
+can show their panels at the same time. If WebView2 cannot start, the window says why, with an error code, and offers <span class="tab">Retry</span>;
+if it says the runtime is missing, install the "WebView2 Runtime" from Microsoft.</li>
 </ol>
 <div class="callout tip"><span class="t">No keyboard to hand?</span>
 Click the panel once, then play on the computer keyboard: <b>A S D F G H J K L</b> play the white keys from C, <b>W E T Y U O P</b> the black keys.</div>
-<h3>Two engines: CHONK and ORBIT</h3>
-<p>The switch <span class="tab">CHONK | ORBIT</span> sits in the header of the ORBIT panel and in the foot bar of the CHONK panel.
+<h3>Two engines: REGOLITH and ORBIT</h3>
+<p>The switch <span class="tab">REGOLITH | ORBIT</span> sits in the header of the ORBIT panel and in the foot bar of the REGOLITH panel.
 Switching cross-fades the two engines in 30 ms, so it can be done while you play. The mode is saved with your project. Projects saved with
-Vintage Chonk 1.0.0 open in CHONK mode and sound exactly as before.</p>
+Vintage Chonk 1.0.0 open in REGOLITH mode, and projects saved with 1.1.0 open in the mode they were saved in (CHONK is now called REGOLITH),
+and all of them sound exactly as before.</p>
 <table>
-<thead><tr><th></th><th>CHONK</th><th>ORBIT</th></tr></thead>
+<thead><tr><th></th><th>REGOLITH</th><th>ORBIT</th></tr></thead>
 <tbody>
-<tr><td class="k">What it is</td><td>The synthesizer of Part 1: 3 oscillators, 2 filters, 4 envelopes, 4 modulators, 8 macros</td><td>Three layers of samples or Chonk synths, each combined with an impulse, blended on the orbit field</td></tr>
-<tr><td class="k">Host programs</td><td>1-16: the 16 factory presets</td><td>17-24: "ORBIT - RUSTED SATELLITE" to "ORBIT - THREE-BODY ORBIT"</td></tr>
-<tr><td class="k">Automation</td><td>22 parameters (macros, master, filters, mod osc, effects, glide)</td><td>42 parameters named "ORBIT ...": puck X/Y, rate, wobble, spread, drift, tape age, output, per layer level, BODY, TONE, GRAIN, MOTION, PITCH, cutoff, resonance, the six effects, macros 1-4</td></tr>
+<tr><td class="k">What it is</td><td>The synthesizer of Part 1: 3 oscillators, 2 filters, 4 envelopes, 4 modulators, 8 macros</td><td>Three layers of samples, REGOLITH synths or live input, each combined with an impulse, blended on the orbit field</td></tr>
+<tr><td class="k">Host programs</td><td>1-16: the 16 factory presets</td><td>17-24: "ORBIT - RUSTED SATELLITE" to "ORBIT - THREE-BODY ORBIT"; 25 and up: the 1.2.0 presets (chapter 24)</td></tr>
+<tr><td class="k">Automation</td><td>22 parameters (macros, master, filters, mod osc, effects, glide)</td><td>Parameters named "ORBIT ...": puck X/Y, rate, wobble, spread, drift, tape age, output, per layer level, BODY, TONE, GRAIN, MOTION, PITCH, cutoff, resonance, the six effects, macros 1-4; new in 1.2.0: motion on/off, puck drift, input trim, and per layer source input, impulse input and input gate</td></tr>
 <tr><td class="k">Latency at 48 kHz</td><td>104 samples (2.2 ms)</td><td>347 samples (7.2 ms)</td></tr>
 <tr><td class="k">Effects</td><td colspan="2">The same six: OCT FUZZ, TAPE, ENSEMBLE, BBD ECHO, OIL CAN, TWIN TANK / SPRING (chapter 7)</td></tr>
 </tbody></table>
-<p>Choosing one of the programs 17-24 in your DAW's program list switches to ORBIT and loads that preset; choosing 1-16 switches back to
-CHONK. Both modes keep their own sound while the other one plays, so you can go back and forth.</p>
+<p>Choosing one of the programs 17 and up in your DAW's program list switches to ORBIT and loads that preset; choosing 1-16 switches back to
+REGOLITH. Both modes keep their own sound while the other one plays, so you can go back and forth.</p>
 
 <!-- =============================================================== 20 === -->
 <h2 class="chapter" id="orbit"><span class="num">20</span>ORBIT: the idea</h2>
@@ -965,29 +975,31 @@ qualities you can dial in on their own.</p>
 <thead><tr><th>Part</th><th>What it does</th></tr></thead>
 <tbody>
 <tr><td class="k">LAYER</td><td>Its number, a lamp that lights while it sounds, and <span class="tab">LEVEL</span>.</td></tr>
-<tr><td class="k">SOURCE</td><td>What you play. <span class="tab">SAMPLE</span> or <span class="tab">SYNTH</span>. Click the window or the name for the source inspector.</td></tr>
-<tr><td class="k">IMPULSE</td><td>What the source is combined with. <span class="tab">SMP</span> (a sample or a generated impulse), <span class="tab">SYN</span> (a Chonk sound printed as an impulse) or <span class="tab">LIVE</span> (another layer, as it plays). Click it for the impulse inspector.</td></tr>
+<tr><td class="k">SOURCE</td><td>What you play. <span class="tab">SAMPLE</span>, <span class="tab">SYNTH</span> or <span class="tab">INPUT</span> (the live sidechain audio, chapter 27). Click the window or the name for the source inspector.</td></tr>
+<tr><td class="k">IMPULSE</td><td>What the source is combined with. <span class="tab">SMP</span> (a sample or a generated impulse), <span class="tab">SYN</span> (a REGOLITH sound printed as an impulse), <span class="tab">LIVE</span> (another layer, as it plays) or <span class="tab">INPUT</span> (the live sidechain audio). Click it for the impulse inspector.</td></tr>
 <tr><td class="k">CONVOLVE MATRIX</td><td>Five sliders, BODY, TONE, GRAIN, MOTION and PITCH, with nixie readouts (chapter 21).</td></tr>
 <tr><td class="k">FILTER</td><td>Click the type for LADDER 24, SVF LOW, SVF BAND, SVF HIGH or off; <span class="tab">CUTOFF</span>, <span class="tab">RES</span>. Below, the envelope window: drag the points of the AMP envelope; click its tag for the FILTER envelope.</td></tr>
 </tbody></table>
 <h3>Sources: what you play</h3>
 <ul>
-<li><b>Chonk synth</b> (<span class="tab">SYNTH</span>): a full CHONK voice playing any CHONK factory or user preset. It follows your notes like any synth.</li>
+<li><b>REGOLITH synth</b> (<span class="tab">SYNTH</span>): a full REGOLITH voice playing any REGOLITH factory or user preset. It follows your notes like any synth.</li>
 <li><b>Sample file</b>: a WAV, AIFF or FLAC of your own (chapter 25). ORBIT finds its root note and plays it across the keyboard.</li>
-<li><b>Chonk print</b>: a CHONK preset recorded once to a sample, at a note and length you choose, then played like a sample. Prints can loop, stretch and run through tape mode, which a live synth cannot.</li>
+<li><b>REGOLITH print</b>: a REGOLITH preset recorded once to a sample, at a note and length you choose, then played like a sample. Prints can loop, stretch and run through tape mode, which a live synth cannot.</li>
+<li><b>Live input</b> (<span class="tab">INPUT</span>): whatever arrives on the plugin's sidechain input, from another track (chapter 27).</li>
 </ul>
 <h3>Impulses: what it is combined with</h3>
 <ul>
 <li><b>Factory impulses</b>, generated by ORBIT itself: SPRING TANK, PLATE, WOOD BOX, BOWED METAL, TAPE HISS, FORMANT VOX, METAL HIT and GLASS. <span class="tab">VARY</span> makes a new variation, <span class="tab">SIZE</span> sets the length.</li>
 <li><b>Sample file</b>: any recording. A short knock gives a body, a long note gives a texture.</li>
-<li><b>Chonk print</b>: a CHONK sound printed as the impulse.</li>
+<li><b>REGOLITH print</b>: a REGOLITH sound printed as the impulse.</li>
 <li><b>LIVE layer</b>: the running output of another layer. Two sounds you play are crossed with each other, note by note. LIVE works for TONE, GRAIN, MOTION and PITCH; BODY needs a fixed impulse.</li>
+<li><b>Live input</b> (<span class="tab">INPUT</span>): the sidechain audio from another track. Unlike LIVE it works for all five dimensions, BODY included (chapter 27).</li>
 </ul>
 <p>The impulse inspector shapes the impulse: <span class="tab">START</span>, <span class="tab">LENGTH</span> (up to 6 s), <span class="tab">PITCH</span>, <span class="tab">DAMP</span> (darker),
 <span class="tab">DECAY</span> (shorter or longer tail), <span class="tab">AGE</span> (worn tape), <span class="tab">BODY GAIN</span>, <span class="tab">REVERSE</span> and
 <span class="tab">KEYTRACK</span>, and how TONE, GRAIN and PITCH read it (next chapter).</p>
 <div class="grid2">
-<figure><img class="tablet" src="img/orbit/insp_source.jpg"><figcaption>Source inspector, layer 2: a Chonk print of Iron Bell at G3, looped. Scroll it for the tape controls.</figcaption></figure>
+<figure><img class="tablet" src="img/orbit/insp_source.jpg"><figcaption>Source inspector, layer 2: a REGOLITH print of Iron Bell at G3, looped. Scroll it for the tape controls.</figcaption></figure>
 <figure><img class="tablet" src="img/orbit/insp_impulse.jpg"><figcaption>Impulse inspector, layer 1: the generated SPRING TANK and its shaping.</figcaption></figure>
 </div>
 
@@ -1043,9 +1055,10 @@ glowing <b>puck</b>. The closer the puck is to a node, the more of that layer yo
 <ul>
 <li><b>Nodes 1-3</b>: the three layers. <b>DRY</b>: the sources without the matrix (the plain sound). Drag any node to a new place.</li>
 <li><b>The puck</b>: where you are listening. Its trail shows its path.</li>
-<li><b>Path buttons</b>: <span class="tab">HOLD</span>, <span class="tab">CIRCLE</span>, <span class="tab">FIG 8</span>, <span class="tab">DRAWN</span>.</li>
-<li><span class="tab">RATE</span>: how long one trip takes (in bars when SYNC is ON, in seconds when FREE).</li>
-<li><span class="tab">WOBBLE</span>: a slow random wander off the path, so no two trips are the same.</li>
+<li><b>Motion and paths</b>: the <span class="tab">MOTION</span> switch (ON / OFF; off holds the puck), then <span class="tab">CIRCLE</span>, <span class="tab">FIG 8</span>, <span class="tab">DRAWN</span>.</li>
+<li><span class="tab">RATE</span>: how long one trip takes (in bars when SYNC is ON, in seconds when FREE). At its lowest, FREE, it reads STOP.</li>
+<li><span class="tab">WOBBLE</span>: a slow random wander off the moving path, so no two trips are the same.</li>
+<li><span class="tab">PUCK DRIFT</span>: the same wander for a held puck (0 = it stays exactly where you put it).</li>
 <li><span class="tab">SPREAD</span>: the size of the path.</li>
 <li><span class="tab">SYNC</span> ON / FREE and <span class="tab">DIRECTION</span> CW / CCW.</li>
 </ul>
@@ -1055,7 +1068,7 @@ glowing <b>puck</b>. The closer the puck is to a node, the more of that layer yo
 <table>
 <thead><tr><th>Path</th><th>What the puck does</th><th>On the field</th></tr></thead>
 <tbody>
-<tr><td class="k">HOLD</td><td>Stays where you put it.</td><td>Click or drag to place it.</td></tr>
+<tr><td class="k">MOTION OFF</td><td>Stays exactly where you put it.</td><td>Click or drag to place it.</td></tr>
 <tr><td class="k">CIRCLE</td><td>Goes round in a circle.</td><td>Drag to move the circle; SPREAD sets its size.</td></tr>
 <tr><td class="k">FIG 8</td><td>Traces a figure of eight: it visits two sides in turn.</td><td>Drag to move it.</td></tr>
 <tr><td class="k">DRAWN</td><td>Follows a loop you draw.</td><td>Drag on the screen to draw.</td></tr>
@@ -1074,9 +1087,25 @@ gentle, constant motion.</p>
 </div>
 <figure><img class="tablet" src="img/orbit/blender_circle.jpg"><figcaption>The same preset with the CIRCLE path.</figcaption></figure>
 </div>
-<div class="callout note"><span class="t">Automation</span>
-<b>ORBIT Puck X</b> and <b>ORBIT Puck Y</b> are host parameters: draw your own movement in the DAW's automation lanes with the path on HOLD.
-The puck position is also a modulation source (ORBIT X, ORBIT Y) and a destination.</div>
+<h3 id="hold">Holding the orbit</h3>
+<p>The orbit does not have to move. With <span class="tab">MOTION</span> OFF the puck stays exactly where you put it and the blend of the four nodes is
+fixed: a steady sound you can still play and shape with the matrix, the filters and the macros. New patches start this way, held at a
+sensible point between the nodes.</p>
+<ul>
+<li><b>Park it by hand.</b> Drag the puck while it moves: it stops where you let go and MOTION goes OFF. The path you had (CIRCLE, FIG 8 or
+DRAWN) is kept.</li>
+<li><b>Start it again.</b> Double-click the field, or switch MOTION ON: the puck carries on along the path it had.</li>
+<li><b>Stop means stop.</b> RATE at its lowest (FREE) reads STOP: the puck stands on its path, with no slow creep.</li>
+<li><b>Only PUCK DRIFT moves a held puck.</b> WOBBLE belongs to the moving path; DRIFT detunes and darkens slowly but does not touch the puck.
+PUCK DRIFT (default 0) lets a held puck wander a little, if you want that.</li>
+</ul>
+<div class="callout note"><span class="t">Automation and macros</span>
+<b>ORBIT Puck X</b> and <b>ORBIT Puck Y</b> are host parameters: with MOTION OFF they move the parked puck, smoothly (no zipper noise), and the panel
+follows them as they play. Dragging the puck by hand writes the same parameters, so a DAW in write or touch mode records your hand movement.
+<b>ORBIT Motion</b> starts and stops the orbit from the DAW. Macros and the mod matrix (destinations PUCK X, PUCK Y) add on top of the parked
+position, so a macro can sweep the blend by hand while automation sets where it rests. The puck position is also a modulation source
+(ORBIT X, ORBIT Y).
+Projects saved with 1.1.0 keep their old behaviour, in which WOBBLE also moved a held puck.</div>
 
 <!-- =============================================================== 23 === -->
 <h2 class="chapter" id="orbitmod"><span class="num">23</span>Modulation and macros in ORBIT</h2>
@@ -1117,22 +1146,23 @@ orbit's rate, wobble and spread, the impulse scan, drift and more.</p>
 <ul>
 <li><span class="tab">DRIFT</span>: every voice drifts a little in pitch, filter and impulse pitch, and the knobs wander slowly. The DRIFT lamp in the header lights when it is on. Nothing stays perfectly still: the analog feel.</li>
 <li><span class="tab">TAPE AGE</span>: the whole output as if played from old tape: highs roll off.</li>
-<li><b>EFFECTS</b>: the six CHONK effects in series (chapter 7). The lamp on each unit switches it on or off; drag its knob for the amount.
+<li><b>EFFECTS</b>: the six REGOLITH effects in series (chapter 7). The lamp on each unit switches it on or off; drag its knob for the amount.
 Click ENSEMBLE's name for its mode, TWIN TANK's name for SPRING, and the BBD ECHO and OIL CAN values for tempo sync.</li>
 <li><span class="tab">OUTPUT</span>: the overall level, with a VU meter and a peak lamp.</li>
 </ul>
 
 <!-- =============================================================== 24 === -->
 <h2 class="chapter" id="orbitpresets"><span class="num">24</span>The ORBIT factory presets</h2>
-<p class="lede">Eight presets show what ORBIT does. They are made only from the generated impulses and CHONK sounds, and their levels are matched:
-each sits near the same loudness and peaks below &minus;1 dBFS. Open them with <span class="tab">BROWSE</span> (or the name), step with &#9664; &#9654;, or pick
-programs 17-24 in your DAW.</p>
+<p class="lede">The factory presets show what ORBIT does. They are made only from the generated impulses and REGOLITH sounds (and, in the INPUT
+presets, whatever you feed them), and their levels are matched: each sits near the same loudness and peaks below &minus;1 dBFS. Open them with
+<span class="tab">BROWSE</span> (or the name), step with &#9664; &#9654;, or pick programs 17 and up in your DAW.</p>
 <div class="pagepair">
 <figure><img class="tablet" src="img/orbit/browse.jpg"><figcaption>BROWSE: factory presets on the left, your own on the right.</figcaption></figure>
 <div>
 <h4>Saving your own</h4>
-<p><span class="tab">SAVE</span> asks for a name and stores the preset in <code>%APPDATA%\Vintage Chonk\orbit</code>, with its samples inside it (up to 24 MB
-each). Your presets appear under USER in the browser; &times; deletes one.</p>
+<p><span class="tab">SAVE</span> asks for a name and stores the preset in <code>%APPDATA%\Atomic Lounge\orbit</code>, with its samples inside it (up to 24 MB
+each). Your presets appear under USER in the browser; &times; deletes one. Presets saved by earlier versions in
+<code>%APPDATA%\Vintage Chonk\orbit</code> are still found while the new folder does not exist; nothing is moved or deleted.</p>
 </div>
 </div>
 <table>
@@ -1146,6 +1176,20 @@ each). Your presets appear under USER in the browser; &times; deletes one.</p>
 <tr><td class="k">LIVE CROSS DRONE</td><td>Walnut Bass as the root; Silk Strings wearing the bass LIVE (TONE and GRAIN); iron air from bowed metal. A drawn loop over 16 bars; the random walk moves the bass filter.</td><td>CROSS</td></tr>
 <tr><td class="k">MOTION CHOP</td><td>A pad chopped by metal hits and 16th-note accents, a metal stab scanned in time with the beat, a dotted-eighth echo.</td><td>CHOP, GRIT</td></tr>
 <tr><td class="k">THREE-BODY ORBIT</td><td>Plate pad, glass strings an octave up (PITCH), a voiced wind (TONE). A circle over four bars between three evenly placed bodies.</td><td>GRAVITY, SPEED</td></tr>
+</tbody></table>
+<p>SPRING RAIN, WOOD BOX MARIMBA and MOTION CHOP hold the puck; RUSTED SATELLITE, BOWED HALO, BREATHING TAPE CHOIR, LIVE CROSS DRONE and
+THREE-BODY ORBIT are the moving showcases. These eight are unchanged from 1.1.0, so songs that use them sound the same.</p>
+<h3>New in 1.2.0 (programs 25 and up)</h3>
+<p>The INPUT presets need audio on the sidechain input (chapter 27): with nothing fed they stay quiet or play only their synth layer.
+They and the other new presets hold the puck at a fixed blend; a macro moves it by hand.</p>
+<table>
+<thead><tr><th>Preset</th><th>What it is</th><th>Macros</th></tr></thead>
+<tbody>
+<tr><td class="k">INPUT - SPRING THROAT</td><td>A REGOLITH synth layer whose BODY impulse is the live input: your drums, voice or guitar become the room the synth rings
+in, refreshed all the time. Held puck.</td><td>a macro sweeps the puck</td></tr>
+<tr><td class="k">INPUT - HALO FOLLOWER</td><td>The live input itself as a source (GATE THRU) inside a bowed-metal / plate body, with a pad layer that takes its colour
+(TONE) from the input. Held puck.</td><td>a macro sweeps the puck</td></tr>
+<tr><td class="k">Held-blend presets</td><td>New presets with the puck parked at a fixed blend, each with a macro on PUCK X / PUCK Y to move it by hand.</td><td>a macro on the puck</td></tr>
 </tbody></table>
 
 <!-- =============================================================== 25 === -->
@@ -1163,17 +1207,18 @@ changing pitch), and <span class="tab">TAPE</span> mode with <span class="tab">W
 <p>When you save your DAW project (or an ORBIT preset), every sample up to 24 MB is stored <b>inside it</b>, losslessly, together with its file path. The
 project opens on another computer, or after the file was moved or deleted. The inspector says <b>EMBEDDED IN THE PROJECT</b>. Larger files are kept
 by path only (TOO LARGE TO EMBED: KEPT BY PATH): keep them where they are. If a sample can be found neither inside the project nor at its path, the
-layer shows <b>MISSING</b> and the rest of the sound still plays. Dropped files are also copied to <code>%APPDATA%\Vintage Chonk\samples</code>.</p>
+layer shows <b>MISSING</b> and the rest of the sound still plays. Dropped files are also copied to <code>%APPDATA%\Atomic Lounge\samples</code> (files kept in the old <code>%APPDATA%\Vintage Chonk\samples</code>
+folder by earlier versions are still found there).</p>
 <div class="callout warn"><span class="t">Only use audio you may use</span>
-Your own recordings, the generated impulses and CHONK prints are always fine. If you share projects or music made with other people's samples,
+Your own recordings, the generated impulses and REGOLITH prints are always fine. If you share projects or music made with other people's samples,
 check their licences: an embedded sample travels with the project.</div>
 <h3>Latency</h3>
 <p>TONE, GRAIN and PITCH analyse the sound in short slices, and the effects run at their own rate between two converters. Together that makes
 ORBIT <b>347 samples late at 48 kHz (about 7.2 ms)</b>. The plugin tells your DAW, which shifts the track back so it lines up with the rest of
-your song. CHONK mode is 104 samples (2.2 ms). The status in the header shows the voices, the CPU load and the latency.</p>
+your song. REGOLITH mode is 104 samples (2.2 ms). For the live input, see chapter 27. The status in the header shows the voices, the CPU load and the latency.</p>
 <ul>
 <li>When you play live, 7 ms is like standing two metres from your amplifier. If it feels late, lower your audio interface's buffer size.</li>
-<li>Switching between CHONK and ORBIT changes the latency; some DAWs only pick that up when playback stops and starts again.</li>
+<li>Switching between REGOLITH and ORBIT changes the latency; some DAWs only pick that up when playback stops and starts again.</li>
 </ul>
 <h3>Processing power</h3>
 <p>Three layers with long impulses and all five dimensions use about 10-12 % of one processor core at 48 kHz. KEYTRACK on long impulses costs the most;
@@ -1219,6 +1264,66 @@ Several layers with high BODY can get loud. Watch the VU meter and the peak lamp
 presets peak below &minus;1 dBFS as a guide.</div>
 
 <!-- ============================================================ PART 4 === -->
+<!-- =============================================================== 27 === -->
+<h2 class="chapter" id="input"><span class="num">27</span>Live input: other tracks through ORBIT</h2>
+<p class="lede">ORBIT can take the sound of another track, live, and use it as a layer's source or as its impulse: a drum loop becomes the room
+a pad rings in, a voice colours a synth, a guitar is played through a spring made of your own sounds.</p>
+<h3>The sidechain input</h3>
+<p>Atomic Lounge has one audio input, named <b>Sidechain</b>: input bus 0, a VST3 sidechain (aux) bus, stereo (mono is accepted: both sides get
+the same signal), switched on by default. Your DAW feeds it from another track. REGOLITH ignores it; in ORBIT it is a choice wherever a layer's
+source or impulse is picked.</p>
+<table>
+<thead><tr><th>Where</th><th>Choose</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td class="k">SOURCE</td><td><span class="tab">INPUT</span>, next to SAMPLE and SYNTH</td><td>The input <i>is</i> the layer's sound, through its matrix, filter and level.
+<span class="tab">GATE</span> <b>THRU</b> (default): it plays whenever audio arrives, notes or not. <b>NOTE</b>: notes open it, shaped by the layer's AMP envelope
+(and velocity).</td></tr>
+<tr><td class="k">IMPULSE</td><td><span class="tab">INPUT</span>, next to SMP, SYN and LIVE</td><td>The input is what the source is combined with, in all five dimensions (below).</td></tr>
+<tr><td class="k">TRIM</td><td>-24 to +24 dB</td><td>The input level before ORBIT uses it, with a small <b>INPUT</b> meter beside it: check here first if nothing happens.</td></tr>
+</tbody></table>
+<h3>The five dimensions with INPUT as the impulse</h3>
+<ul>
+<li><b>BODY</b>: true convolution with the input. ORBIT keeps capturing the last <span class="tab">WINDOW</span> of input (100, 250, 500 or 1000 ms;
+250 ms by default) and makes a new body from it about every 140 ms (6720 samples at 48 kHz), cross-fading from the old body to the new one over 2048
+samples, so it never clicks or zips. Each body is set to the same energy, so its level does not jump when the input gets louder or softer; silence
+on the input gives a silent body (only the dry share of BODY is heard).</li>
+<li><b>TONE</b>, <b>GRAIN</b>, <b>PITCH</b> and <b>MOTION</b>: the input is the live modulator, as LIVE uses another layer: its colour, texture,
+overtones and loudness contour cross over as it plays.</li>
+</ul>
+<h3>Latency</h3>
+<p>As a <b>source</b>, the input comes out exactly as late as the plugin reports (347 samples, 7.2 ms at 48 kHz in ORBIT), and your DAW lines it
+up with the rest of the song. As a <b>BODY impulse</b>, a new body is captured every 140 ms; the newest sound on the input starts to fade into the body about
+97 ms after it arrives (4672 samples at 48 kHz with the 250 ms window; 4992 with 1000 ms) and is at full weight 2048 samples later
+(about 140 ms). That is part of the effect (a body is always a
+stretch of what came before), not something the DAW can make up. As the TONE, GRAIN, PITCH or MOTION modulator the input lines up with the
+source within the analysis window.</p>
+<h3>In Ableton Live</h3>
+<ol class="steps">
+<li>Put Atomic Lounge on a MIDI track and switch it to ORBIT.</li>
+<li>Open the plug-in device's sidechain section (the <b>Sidechain</b> toggle in the device's title bar), switch it on and choose the track to
+take in <b>Audio From</b> (pre or post its effects or mixer, as you like).</li>
+<li>In a layer, choose <span class="tab">INPUT</span> as the SOURCE or the IMPULSE, or load an INPUT preset. Watch the INPUT meter and set TRIM.</li>
+</ol>
+<div class="callout note"><span class="t">Not yet tried in Live 10</span>
+The sidechain bus is the standard VST3 one that Live uses for plug-in sidechains, but we have not tested it in Live 10 ourselves. If Live does
+not offer Audio From for the instrument, tell us which Live version you have.</div>
+<h3>In Measures</h3>
+<p>In <b>Devices</b>, the instrument's source card shows <b>Input from</b>: pick the track or bus to take. Measures feeds the input in 64-frame
+blocks, one block (1.33 ms at 48 kHz) behind, the same way live and in exports.</p>
+<h3>In the standalone app</h3>
+<p>Click <span class="tab">Options</span>, then <b>Audio/MIDI Settings</b>, and pick the input channels of your audio interface. The input starts
+<b>muted</b>, to avoid feedback through speakers: untick <b>Mute audio input</b> to let it in. Use headphones, or keep the microphone away from the
+speakers.</p>
+<h3>Host parameters</h3>
+<table>
+<thead><tr><th>Parameter</th><th>Values</th></tr></thead>
+<tbody>
+<tr><td class="k">ORBIT L1 / L2 / L3 Source Input</td><td>1 = the layer's source is INPUT; 0 = its sample or synth again</td></tr>
+<tr><td class="k">ORBIT L1 / L2 / L3 Impulse Input</td><td>1 = the layer's impulse is INPUT; 0 = its own impulse again</td></tr>
+<tr><td class="k">ORBIT L1 / L2 / L3 Input Gate</td><td>0 = THRU, 1 = NOTE</td></tr>
+<tr><td class="k">ORBIT Input Trim</td><td>-24 to +24 dB (middle = 0 dB)</td></tr>
+</tbody></table>
+
 <section class="part">
   <div class="stripe"><div style="background:#fa882c"></div><div style="background:#f2c02e"></div><div style="background:#a4c440"></div><div style="background:#30baac"></div></div>
   <div class="no">PART 5</div>
@@ -1229,15 +1334,15 @@ presets peak below &minus;1 dBFS as a guide.</div>
 </section>
 
 <!-- =============================================================== 18 === -->
-<h2 class="chapter" id="convert"><span class="num">27</span>Converting Massive presets</h2>
-<p class="lede">Vintage Chonk can read presets from the original Native Instruments Massive (<code>.nmsv</code> files; not Massive X).
+<h2 class="chapter" id="convert"><span class="num">28</span>Converting Massive presets</h2>
+<p class="lede">Atomic Lounge can read presets from the original Native Instruments Massive (<code>.nmsv</code> files; not Massive X).
 The tablet converts them itself (<span class="tab">IMPORT .NMSV</span>, chapter 18). For the FM-1 there is a converter page in your browser.</p>
 <h3>The converter page</h3>
 <p>The page is one file, <code>editor/converter.html</code>. It works offline: your preset never leaves the computer. Open it in <b>Chrome or Edge</b>
 (they have Web MIDI).</p>
 <ol class="steps">
 <li><b>Load a Massive preset:</b> drop a <code>.nmsv</code> file on the page or click to choose one.</li>
-<li><b>What carries over:</b> four counters (supported, approximated, unsupported, Massive wavetables replaced) with lists you can open. Buttons: <b>Download .mfp</b> (a Vintage Chonk preset file), <b>Download IR JSON</b>, <b>Download report (.md)</b>.</li>
+<li><b>What carries over:</b> four counters (supported, approximated, unsupported, Massive wavetables replaced) with lists you can open. Buttons: <b>Download .mfp</b> (an Atomic Lounge preset file), <b>Download IR JSON</b>, <b>Download report (.md)</b>.</li>
 <li><b>Key settings on the FM1:</b> cards for the oscillators, filters, envelopes, modulators 5-8, routings, effects and macros.</li>
 <li><b>FM1 over USB MIDI:</b> click <b>Connect MIDI</b> and allow SysEx. Choose the FM-1's ports in the Output and Input lists (the port is called <b>USB-Midi</b>). Click <b>Say hello</b> to check the link.</li>
 <li><b>Send to FM1 (play now)</b> puts the sound into the FM-1's edit buffer. To keep it, type a slot (1-64) and click <b>Store to slot</b>; it asks before overwriting.</li>
@@ -1246,7 +1351,7 @@ The tablet converts them itself (<span class="tab">IMPORT .NMSV</span>, chapter 
 The page does not change knobs live on the FM-1 and never installs firmware. (The page still carries an older "untested on hardware" banner.)</p>
 <h3>What converts, and how</h3>
 <table>
-<thead><tr><th>Massive</th><th>Vintage Chonk</th></tr></thead>
+<thead><tr><th>Massive</th><th>Atomic Lounge</th></tr></thead>
 <tbody>
 <tr><td class="k">Wavetables</td><td><b>Approximated:</b> each becomes the nearest classic waveform (triangle ... narrowest pulse). Listed under "wavetables replaced". Intensity modes become phase bend.</td></tr>
 <tr><td class="k">Filters</td><td>LP4, LP2, Bandpass, Bandreject: direct. Highpass 2 &rarr; HP. <b>Approximated:</b> HP4 as a 2-pole HP; Allpass, Scream, Daft &rarr; LP2; Comb &rarr; BP; Acid &rarr; ACID; Double Notch &rarr; one NOTCH.</td></tr>
@@ -1257,20 +1362,20 @@ The page does not change knobs live on the FM-1 and never installs firmware. (Th
 <tr><td class="k">Voicing</td><td>Poly, mono and legato; Monorotate is approximated.</td></tr>
 </tbody></table>
 <div class="callout note"><span class="t">Expect the character, not a copy</span>
-The report always reminds you: Vintage Chonk uses its own original waveforms and its own filter designs. A converted preset keeps the
+The report always reminds you: Atomic Lounge uses its own original waveforms and its own filter designs. A converted preset keeps the
 structure and movement of the original, not an identical sound. Play with the macros and the master level (VOICE &rarr; MASTER) after converting.</div>
 
 <!-- =============================================================== 19 === -->
-<h2 class="chapter" id="midi"><span class="num">28</span>MIDI</h2>
+<h2 class="chapter" id="midi"><span class="num">29</span>MIDI</h2>
 <div class="grid2">
 <div>
 <h3 style="margin-top:0">Connecting</h3>
 <ul>
-<li><b>FM-1:</b> connect USB-C to a computer. Under Vintage Chonk it appears as <b>USB-Midi</b> (USB ID 3654:7756). Under M-VAVE's V15 it was <b>FM-1 Midi</b>.</li>
+<li><b>FM-1:</b> connect USB-C to a computer. With this firmware it appears as <b>USB-Midi</b> (USB ID 3654:7756). Under M-VAVE's V15 it was <b>FM-1 Midi</b>.</li>
 <li><b>Tablet:</b> any class-compliant USB MIDI keyboard through an OTG adapter, or another MIDI device listed by Android's MIDI service.</li>
 <li>Both listen on <b>all 16 channels</b>.</li>
 </ul>
-<h3>What Vintage Chonk responds to</h3>
+<h3>What Atomic Lounge responds to</h3>
 <table><tbody>
 <tr><td class="k">Note on / off</td><td>with velocity</td></tr>
 <tr><td class="k">Pitch bend</td><td>range set by BEND</td></tr>
@@ -1297,7 +1402,7 @@ The tablet ignores MIDI clock. No other CCs are mapped, and MIDI Learn is not av
 </div>
 
 <!-- =============================================================== 20 === -->
-<h2 class="chapter" id="trouble"><span class="num">29</span>Troubleshooting</h2>
+<h2 class="chapter" id="trouble"><span class="num">30</span>Troubleshooting</h2>
 <table>
 <thead><tr><th>Problem</th><th>What to try</th></tr></thead>
 <tbody>
@@ -1318,6 +1423,8 @@ The tablet ignores MIDI clock. No other CCs are mapped, and MIDI Learn is not av
 <tr><td class="k">Converter page finds no FM-1</td><td>Use Chrome or Edge and allow MIDI/SysEx. Choose <b>USB-Midi</b> by hand in both port lists. Close other programs that hold the port.</td></tr>
 <tr><td class="k">Install page will not install</td><td>It must be served from <code>127.0.0.1</code> (not opened as a file) and the FM-1 must answer as stock V15. Restore V15 first.</td></tr>
 <tr><td class="k">FM-1 screen flickers / restarts, no USB</td><td>Boot loop. Recover with the FM-1 Transporter (chapter 9), then install again.</td></tr>
+<tr><td class="k">Plugin window blank or "WebView2 could not start"</td><td>The window names the reason and an error code (HRESULT). Click <span class="tab">Retry</span>. If the runtime is missing, install Microsoft's "WebView2 Runtime". Each host program has its own WebView2 folder, so a running standalone app no longer blocks a DAW's panel.</td></tr>
+<tr><td class="k">ORBIT INPUT does nothing</td><td>Look at the INPUT meter. If it is still: check the DAW's sidechain routing (Live: Sidechain on, Audio From), Measures' Input from, or in the standalone app untick Mute audio input. If it moves: is the layer's SOURCE or IMPULSE set to INPUT, is its LEVEL up and is the puck near its node? GATE NOTE needs notes.</td></tr>
 <tr><td class="k">Tablet: stuck in the app</td><td>Hold the VINTAGE CHONK title for 3 s to open Android Settings.</td></tr>
 <tr><td class="k">Tablet: crackles</td><td>The app enlarges its audio buffer by itself after a dropout. Close other apps; keep the tablet charged.</td></tr>
 <tr><td class="k">Tablet: no MIDI keyboard</td><td>Use an OTG adapter and a class-compliant keyboard. The strip says NO MIDI IN when none is found; allow the USB permission prompt.</td></tr>
@@ -1325,7 +1432,7 @@ The tablet ignores MIDI clock. No other CCs are mapped, and MIDI Learn is not av
 
 <!-- =============================================================== 21 === -->
 <section class="qref">
-<h2 class="chapter" id="qref"><span class="num">30</span>Quick-reference card (FM-1)</h2>
+<h2 class="chapter" id="qref"><span class="num">31</span>Quick-reference card (FM-1)</h2>
 <div class="grid2">
 <div>
 <h3>Encoders and knobs</h3>
@@ -1400,14 +1507,15 @@ The tablet ignores MIDI clock. No other CCs are mapped, and MIDI Learn is not av
 </section>
 
 <!-- =============================================================== 22 === -->
-<h2 class="chapter" id="credits"><span class="num">31</span>Credits, licences and trademarks</h2>
-<h3>Vintage Chonk</h3>
-<p>Vintage Chonk is free software and comes with no warranty. The FM-1 firmware and the Android app are under the
+<h2 class="chapter" id="credits"><span class="num">32</span>Credits, licences and trademarks</h2>
+<h3>Atomic Lounge</h3>
+<p>Atomic Lounge is free software and comes with no warranty. The FM-1 firmware and the Android app are under the
 <b>GNU General Public License, version 3</b> (GPL-3.0-only).</p>
 <p>The Windows VST3 plugin is built with <b>JUCE 8</b>, used under its open-source licence (AGPLv3), so the plugin and its
 public source repository are under the <b>GNU Affero General Public License, version 3</b> (AGPL-3.0-only): the full text is
 in that repository's <code>LICENSE</code> file, and its <code>NOTICE</code> file lists JUCE, the Steinberg VST3 SDK (MIT) and the
 Microsoft WebView2 SDK (BSD-3-Clause).</p>
+<p>Source code of the Windows plugin and standalone app, the releases and their checksums: <b>https://github.com/evancoley-ai/atomic-lounge</b>.</p>
 <p>The FM-1 firmware build links M-VAVE's binary FM-1 engine library from the open fm1_open SDK. <code>LICENSE-EXCEPTION.md</code> grants the
 additional permission (GPL-3.0 section 7) to link that library, which keeps <b>its own terms</b>: M-VAVE allows it to be copied,
 linked and redistributed for FM-1 devices only. The SDK's application sources are GPL-3.0 with the same exception; its boot and update
@@ -1417,14 +1525,14 @@ resources and the V15 image are Apache-2.0.</p>
 <li><b>FM-1 Transporter</b> firmware by <b>kurogedelic</b> (MIT licence).</li>
 <li><b>MvaveFM1Unbricker</b> by <b>Quixotic7</b> (MIT licence), which drives the Transporter recovery; it uses kagaimiq's <b>jl-uboot-tool</b> (MIT).</li>
 <li><b>fm1_open</b>, the open FM-1 SDK and updater that the install page uses unchanged.</li>
-<li>The OCT FUZZ, OIL CAN, TWIN TANK and SPRING effects are ports of the developer's own effect designs; TAPE, ENSEMBLE and BBD ECHO are Vintage Chonk's own.</li>
+<li>The OCT FUZZ, OIL CAN, TWIN TANK and SPRING effects are ports of the developer's own effect designs; TAPE, ENSEMBLE and BBD ECHO are Atomic Lounge's own.</li>
 <li>Typefaces in this guide: Righteous, Nunito and JetBrains Mono, under the SIL Open Font License 1.1.</li>
 </ul>
 <h3>Trademarks</h3>
 <div class="callout note">Native Instruments and Massive are trademarks of Native Instruments; Moog is a trademark of Moog Music;
-M-VAVE and FM-1 belong to their owner; VST is a trademark of Steinberg Media Technologies GmbH. Vintage Chonk is an independent project, not affiliated with or endorsed by them.
+M-VAVE and FM-1 belong to their owner; VST is a trademark of Steinberg Media Technologies GmbH. Atomic Lounge is an independent project, not affiliated with or endorsed by them.
 These names appear in this guide only to describe compatibility.</div>
-<p class="small dim" style="margin-top:20pt">This guide describes Vintage Chonk 1.1.0 for Windows (VST3 and standalone, with ORBIT) and the firmware and app as of 20 November 2026 (with the step sequencer and echo sync). Screens of the FM-1 in this guide are rendered by the
+<p class="small dim" style="margin-top:20pt">This guide describes Atomic Lounge 1.2.0 for Windows (VST3 and standalone, with REGOLITH and ORBIT) and the firmware and app as of 20 November 2026 (with the step sequencer and echo sync). Screens of the FM-1 in this guide are rendered by the
 real firmware user interface running on a desktop emulation (<code>tools/guide_shots</code>); tablet screens come from the app's own test
 run; ORBIT screens are the plugin's own panel page (<code>docs/guide/orbit_shots.mjs</code>) and a capture of the running plugin window.
 Rebuild the guide with <code>python docs/guide/build_guide.py</code>.</p>

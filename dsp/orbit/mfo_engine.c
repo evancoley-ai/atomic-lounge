@@ -119,6 +119,17 @@ typedef struct {
     float out[2][MFO_BLOCK];
     float mod[MFO_BLOCK];
     int notes_held;
+    /* live INPUT (1.2.0) */
+    int in_src, in_imp, in_gate;
+    float in_win;
+    mfo_env_t inenv;
+    mfo_conv_t *iconv[2];        /* two convolvers on the bus: the active kernel and the one coming in */
+    mfo_kernel_t *ik[2];
+    int ik_ready[2];
+    mfo_kload_t *ild;
+    float *istage;               /* the captured window being loaded */
+    int iact;                    /* slot at full weight, -1 = none yet */
+    int iphase, icount, ilen;    /* 0 capture next, 1 loading, 2 warm-up, 3 cross-fade */
 } layer_t;
 
 struct mfo_keytrack {
@@ -144,6 +155,11 @@ struct mfo_engine {
     layer_t L[MFO_LAYERS];
     float *dry[2]; int dry_pos;
     uint32_t age;
+    /* live INPUT (1.2.0) */
+    float *cap; int cap_len, cap_pos; int cap_on;   /* mono capture ring of the input (after the trim) */
+    float in_gain;
+    const float *cin[2]; float cin_mono[MFO_BLOCK];  /* the current chunk's input */
+    float held_wob; int freeze;
 };
 
 void mfo_config_default(mfo_config_t *c)
@@ -157,6 +173,7 @@ void mfo_config_default(mfo_config_t *c)
     c->stft_hop = 128;
     c->spectral = 1;
     c->seed = 0x0B17u;
+    c->live_input = 1;
 }
 
 static float P(const mfo_engine_t *e, int id) { return e->cur[id]; }
@@ -173,7 +190,11 @@ void mfo_engine_destroy(mfo_engine_t *e)
         if (L->vconv) for (int i = 0; i < e->cfg.keytrack_voices; i++) mfo_conv_destroy(L->vconv[i]);
         free(L->vconv);
         mfo_xsyn_destroy(L->xs);
+        for (int s = 0; s < 2; s++) { mfo_conv_destroy(L->iconv[s]); mfo_kernel_destroy(L->ik[s]); }
+        mfo_kload_destroy(L->ild);
+        free(L->istage);
     }
+    free(e->cap);
     free(e->dry[0]); free(e->dry[1]);
     free(e);
 }
@@ -215,7 +236,26 @@ mfo_engine_t *mfo_engine_create(const mfo_config_t *c)
         if (L->xs) mfo_xsyn_set_stagger(L->xs, (l * MFO_BLOCK) % cfg.stft_hop);
         L->last_note = 60; L->last_vel = 0.8f;
         L->bump.b0 = 1.0f;
+        L->in_win = 0.25f;
+        if (cfg.live_input) {
+            int il = (int)(MFO_INPUT_MAX_SECONDS * cfg.sample_rate);
+            for (int s = 0; ok && s < 2; s++) {
+                L->iconv[s] = mfo_conv_create(2, il); L->ik[s] = mfo_kernel_alloc(1, il);
+                ok = ok && L->iconv[s] && L->ik[s];
+                if (L->iconv[s]) mfo_conv_set_stagger(L->iconv[s], ((l * 2 + s) * 640) % 4096);
+            }
+            L->ild = mfo_kload_create(il);
+            L->istage = calloc((size_t)il, sizeof(float));
+            ok = ok && L->ild && L->istage;
+        }
     }
+    if (cfg.live_input) {
+        e->cap_len = (int)(MFO_INPUT_MAX_SECONDS * cfg.sample_rate) + MFO_BLOCK;
+        e->cap = calloc((size_t)e->cap_len, sizeof(float));
+        ok = ok && e->cap;
+    }
+    e->in_gain = 1.0f;
+    e->held_wob = -1.0f;
     e->lat = cfg.spectral && e->L[0].xs ? mfo_xsyn_latency(e->L[0].xs) : 0;
     if (e->lat) {
         e->dry[0] = calloc((size_t)e->lat, sizeof(float));
@@ -228,6 +268,13 @@ mfo_engine_t *mfo_engine_create(const mfo_config_t *c)
     e->bpm = 120.0f;
     mfo_engine_reset(e);
     return e;
+}
+
+static void input_reset_layer(mfo_engine_t *e, int l)
+{
+    layer_t *L = &e->L[l];
+    for (int s = 0; s < 2; s++) { if (L->iconv[s]) mfo_conv_reset(L->iconv[s]); L->ik_ready[s] = 0; }
+    L->iact = -1; L->iphase = 0; L->icount = 0;
 }
 
 void mfo_engine_reset(mfo_engine_t *e)
@@ -247,7 +294,11 @@ void mfo_engine_reset(mfo_engine_t *e)
         L->dcx[0] = L->dcx[1] = L->dcy[0] = L->dcy[1] = 0;
         L->body_prev = 0; L->lvl_prev[0] = L->lvl_prev[1] = 0;
         L->notes_held = 0;
+        memset(&L->inenv, 0, sizeof L->inenv);
+        input_reset_layer(e, l);
     }
+    if (e->cap) memset(e->cap, 0, sizeof(float) * (size_t)e->cap_len);
+    e->cap_pos = 0;
     if (e->lat) { memset(e->dry[0], 0, sizeof(float) * (size_t)e->lat); memset(e->dry[1], 0, sizeof(float) * (size_t)e->lat); }
     e->dry_pos = 0;
     e->cur_init = 0;
@@ -481,7 +532,9 @@ void mfo_note_on(mfo_engine_t *e, int note, int vel)
         L->notes_held++;
         mfo_env_gate(&L->fenv, 1);
         if (L->has_imp) L->scan = (double)LP_(e, l, MFO_L_SCAN_POS) * L->imp.length;
-        if (L->src == MFO_SRC_SAMPLE && L->has_sample) {
+        if (L->in_src) {
+            mfo_env_gate(&L->inenv, 1);
+        } else if (L->src == MFO_SRC_SAMPLE && L->has_sample) {
             int nv = e->cfg.max_voices, pick = -1;
             for (int i = 0; i < nv; i++) if (!L->v[i].active) { pick = i; break; }
             if (pick < 0) {                       /* steal: quietest released voice, else the oldest */
@@ -501,7 +554,7 @@ void mfo_note_off(mfo_engine_t *e, int note)
 {
     for (int l = 0; l < MFO_LAYERS; l++) {
         layer_t *L = &e->L[l];
-        if (L->notes_held > 0 && --L->notes_held == 0) mfo_env_gate(&L->fenv, 0);
+        if (L->notes_held > 0 && --L->notes_held == 0) { mfo_env_gate(&L->fenv, 0); mfo_env_gate(&L->inenv, 0); }
         for (int i = 0; i < e->cfg.max_voices; i++) {
             voice_t *v = &L->v[i];
             if (v->active && v->note == note && !v->released) { v->released = 1; mfo_env_gate(&v->env, 0); }
@@ -519,6 +572,7 @@ void mfo_all_notes_off(mfo_engine_t *e)
         layer_t *L = &e->L[l];
         L->notes_held = 0;
         mfo_env_gate(&L->fenv, 0);
+        mfo_env_gate(&L->inenv, 0);
         for (int i = 0; i < e->cfg.max_voices; i++) if (L->v[i].active) { L->v[i].released = 1; mfo_env_gate(&L->v[i].env, 0); }
         mfe_all_notes_off(L->synth);
     }
@@ -622,7 +676,7 @@ static void orbit_update(mfo_engine_t *e, int n)
         float sync = P(e, MFO_P_ORBIT_SYNC);
         float hz = sync >= 1.0f ? e->bpm / 60.0f / sync : P(e, MFO_P_ORBIT_RATE);
         float dir = P(e, MFO_P_ORBIT_DIR) > 0.5f ? 1.0f : -1.0f;
-        e->orbit_th += (double)(MFO_TWO_PI * hz * dt * dir);
+        if (!e->freeze) e->orbit_th += (double)(MFO_TWO_PI * hz * dt * dir);
         if (e->orbit_th > 1e6 || e->orbit_th < -1e6) e->orbit_th = fmod(e->orbit_th, 2.0 * 3.14159265358979323846);
         float th = (float)e->orbit_th, sx = P(e, MFO_P_ORBIT_SIZE_X), sy = P(e, MFO_P_ORBIT_SIZE_Y);
         float ox, oy;
@@ -633,7 +687,7 @@ static void orbit_update(mfo_engine_t *e, int n)
         x = cx + ox * cr - oy * sr;
         y = cy + ox * sr + oy * cr;
     }
-    float wob = P(e, MFO_P_ORBIT_WOBBLE);
+    float wob = (path && !e->freeze) || e->held_wob < 0.0f ? P(e, MFO_P_ORBIT_WOBBLE) : e->held_wob;   /* stopped = held */
     walk(e, &e->wob[0], &e->wobl[0], dt, 1.5f);
     walk(e, &e->wob[1], &e->wobl[1], dt, 1.5f);
     x += wob * 0.25f * e->wobl[0];
@@ -668,7 +722,16 @@ static void layer_sources(mfo_engine_t *e, int l, int n)
         tape_rate = 1.0f + LP_(e, l, MFO_L_WOW) * 0.0045f * (sinf(MFO_TWO_PI * L->wow_ph) + 0.4f * L->wow_w)
                          + LP_(e, l, MFO_L_FLUTTER) * 0.0012f * sinf(MFO_TWO_PI * L->flut_ph);
     }
-    if (L->src == MFO_SRC_SAMPLE && L->has_sample) {
+    if (L->in_src) {
+        float envb[MFO_BLOCK];
+        float vs = LP_(e, l, MFO_L_VEL_SENS), vg = 1.0f - vs + vs * L->last_vel;
+        if (L->in_gate) mfo_env_run(&L->inenv, LP_(e, l, MFO_L_ATTACK), LP_(e, l, MFO_L_DECAY), LP_(e, l, MFO_L_SUSTAIN),
+                                    LP_(e, l, MFO_L_RELEASE), e->sr, envb, n);
+        for (int i = 0; i < n; i++) {
+            float g = L->in_gate ? envb[i] * vg : 1.0f;
+            acc[0][i] = e->cin[0][i] * g; acc[1][i] = e->cin[1][i] * g;
+        }
+    } else if (L->src == MFO_SRC_SAMPLE && L->has_sample) {
         for (int i = 0; i < e->cfg.max_voices; i++)
             if (L->v[i].active && !voice_render(e, l, &L->v[i], acc, n, tape_rate)) L->v[i].active = 0;
     } else if (L->src == MFO_SRC_SYNTH) {
@@ -767,6 +830,105 @@ static inline float soft_knee(float x)
     return x < 0 ? -y : y;
 }
 
+/* BODY against the live input: two convolvers on the bus, kernels refreshed from the capture ring */
+static int input_warm(int len) { return len > 4096 ? 4096 : len > 512 ? 512 : 64; }
+static void input_body(mfo_engine_t *e, int l, float *const *bus, float *const *out, int n, float b0, float b1)
+{
+    layer_t *L = &e->L[l];
+    int in = L->iact < 0 ? 0 : 1 - L->iact;        /* the slot being refreshed */
+    if (L->iphase == 0) {
+        /* snapshot the newest window (oldest sample first), short fades, unit energy above a floor */
+        int len = (int)(L->in_win * e->sr);
+        int maxl = e->cap_len - MFO_BLOCK;
+        if (len > maxl) len = maxl;
+        if (len < 64) len = 64;
+        int fi = (int)(0.002f * e->sr), fo = (int)(0.1f * len);
+        if (fo > (int)(0.02f * e->sr)) fo = (int)(0.02f * e->sr);
+        double en = 0.0;
+        int start = e->cap_pos - len;
+        while (start < 0) start += e->cap_len;
+        for (int i = 0; i < len; i++) {
+            float x = e->cap[(start + i) % e->cap_len];
+            if (i < fi) x *= (float)i / fi;
+            if (i >= len - fo) x *= (float)(len - 1 - i) / fo;
+            L->istage[i] = x;
+            en += (double)x * x;
+        }
+        double fl = (double)len * 1e-5;              /* -50 dBFS RMS */
+        float g = 0.8f / (float)sqrt(en > fl ? en : fl);
+        L->ilen = len;
+        L->ik_ready[in] = 0;
+        mfo_kload_begin(L->ild, L->ik[in], L->istage, len, g);
+        L->iphase = 1; L->icount = 0;
+    } else if (L->iphase == 1) {
+        if (mfo_kload_step(L->ild, 2)) { L->ik_ready[in] = 1; L->iphase = 2; L->icount = 0; }
+    }
+    float y[2][2][MFO_BLOCK];
+    for (int s = 0; s < 2; s++) {
+        float *o[2] = { y[s][0], y[s][1] };
+        mfo_conv_process(L->iconv[s], L->ik_ready[s] ? L->ik[s] : NULL, (const float *const *)bus, o, n);
+    }
+    int xf = L->iphase == 3;
+    int a = L->iact < 0 ? 0 : L->iact;
+    for (int i = 0; i < n; i++) {
+        float wn = xf ? (float)(L->icount + i + 1) / MFO_INPUT_XFADE : 0.0f;
+        if (wn > 1.0f) wn = 1.0f;
+        /* equal-power: the two kernels hold different windows of the input (mostly uncorrelated responses) */
+        float wnn = sinf(wn * 1.5707963f), woo = L->iact >= 0 ? cosf(wn * 1.5707963f) : 0.0f;
+        float wl = woo * y[a][0][i] + wnn * y[in][0][i], wr = woo * y[a][1][i] + wnn * y[in][1][i];
+        float b = b0 + (b1 - b0) * (float)(i + 1) / n;
+        out[0][i] = bus[0][i] + b * (wl - bus[0][i]);
+        out[1][i] = bus[1][i] + b * (wr - bus[1][i]);
+    }
+    if (L->iphase == 2) {
+        L->icount += n;
+        if (L->icount >= input_warm(L->ilen)) { L->iphase = 3; L->icount = 0; }
+    } else if (L->iphase == 3) {
+        L->icount += n;
+        if (L->icount >= MFO_INPUT_XFADE) {
+            if (L->iact >= 0) L->ik_ready[L->iact] = 0;
+            L->iact = in; L->iphase = 0; L->icount = 0;
+        }
+    }
+}
+
+int mfo_input_body_delay(const mfo_engine_t *e, int l, int *full)
+{
+    if (l < 0 || l >= MFO_LAYERS) return 0;
+    int len = (int)(e->L[l].in_win * e->sr);
+    int parts = 0;
+    for (int s = 64; s < len; s += s < 512 ? 64 : s < 4096 ? 512 : 4096) parts++;
+    int start = ((parts + 1) / 2 + 1) * MFO_BLOCK + input_warm(len);
+    if (full) *full = start + MFO_INPUT_XFADE;
+    return start;
+}
+
+void mfo_layer_set_input(mfo_engine_t *e, int l, int src_input, int imp_input, int gate_note, float window_seconds)
+{
+    if (l < 0 || l >= MFO_LAYERS) return;
+    layer_t *L = &e->L[l];
+    src_input = src_input != 0;
+    imp_input = imp_input != 0 && L->iconv[0] != NULL;
+    if (src_input != L->in_src) {
+        memset(L->v, 0, sizeof L->v);
+        mfe_all_notes_off(L->synth);
+        memset(&L->inenv, 0, sizeof L->inenv);
+        if (src_input && L->notes_held > 0) mfo_env_gate(&L->inenv, 1);
+        L->in_src = src_input;
+    }
+    if (imp_input != L->in_imp) { input_reset_layer(e, l); L->in_imp = imp_input; }
+    L->in_gate = gate_note != 0;
+    L->in_win = mfo_clampf(window_seconds, 0.05f, MFO_INPUT_MAX_SECONDS);
+    int any = 0;
+    for (int k = 0; k < MFO_LAYERS; k++) any = any || e->L[k].in_imp;
+    if (any && !e->cap_on && e->cap) { memset(e->cap, 0, sizeof(float) * (size_t)e->cap_len); e->cap_pos = 0; }
+    e->cap_on = any;
+}
+
+void mfo_set_input_gain(mfo_engine_t *e, float g) { e->in_gain = g >= 0.0f && g < 100.0f ? g : 1.0f; }
+void mfo_set_held_wobble(mfo_engine_t *e, float w) { e->held_wob = w < 0.0f ? -1.0f : mfo_clampf(w, 0.0f, 1.0f); }
+void mfo_set_orbit_freeze(mfo_engine_t *e, int on) { e->freeze = on != 0; }
+
 static void layer_matrix(mfo_engine_t *e, int l, int n)
 {
     layer_t *L = &e->L[l];
@@ -774,8 +936,10 @@ static void layer_matrix(mfo_engine_t *e, int l, int n)
     float *out[2] = { L->out[0], L->out[1] };
     /* BODY on the bus (unless keytracked per voice) */
     float b1 = LP_(e, l, MFO_L_BODY), b0 = L->body_prev;
-    int kt = LP_(e, l, MFO_L_KEYTRACK) > 0.5f && L->kt && L->src == MFO_SRC_SAMPLE;
-    if (L->kernel && !kt && (b1 > 1e-5f || b0 > 1e-5f)) {
+    int kt = LP_(e, l, MFO_L_KEYTRACK) > 0.5f && L->kt && L->src == MFO_SRC_SAMPLE && !L->in_src;
+    if (L->in_imp && L->iconv[0]) {
+        input_body(e, l, bus, out, n, b0, b1);
+    } else if (L->kernel && !kt && (b1 > 1e-5f || b0 > 1e-5f)) {
         if (!L->bus_conv_on) { mfo_conv_reset(L->bus_conv); L->bus_conv_on = 1; }
         float w0[MFO_BLOCK], w1[MFO_BLOCK];
         float *wo[2] = { w0, w1 };
@@ -795,7 +959,9 @@ static void layer_matrix(mfo_engine_t *e, int l, int n)
     if (L->xs) {
         int ms = (int)LP_(e, l, MFO_L_MOD_SOURCE);
         const float *mod = L->mod;
-        if (ms >= 1 && ms <= MFO_LAYERS && ms - 1 != l) {
+        if (L->in_imp) {
+            memcpy(L->mod, e->cin_mono, sizeof(float) * (size_t)n);
+        } else if (ms >= 1 && ms <= MFO_LAYERS && ms - 1 != l) {
             layer_t *S = &e->L[ms - 1];
             for (int i = 0; i < n; i++) L->mod[i] = 0.5f * (S->bus[0][i] + S->bus[1][i]);
         } else {
@@ -836,10 +1002,22 @@ static void layer_matrix(mfo_engine_t *e, int l, int n)
     }
 }
 
-static void render_chunk(mfo_engine_t *e, float *outl, float *outr, int n)
+static void render_chunk(mfo_engine_t *e, const float *inl, const float *inr, float *outl, float *outr, int n)
 {
     float dt = (float)n / e->sr;
     update_params(e, n);
+    /* the input of this chunk (after the trim), silence when absent */
+    float il[MFO_BLOCK], ir[MFO_BLOCK];
+    float g = e->in_gain;
+    for (int i = 0; i < n; i++) {
+        float a = inl ? inl[i] * g : 0.0f, b = inr ? inr[i] * g : a;
+        il[i] = a; ir[i] = b;
+        e->cin_mono[i] = 0.5f * (a + b);
+    }
+    e->cin[0] = il; e->cin[1] = ir;
+    if (e->cap_on) {
+        for (int i = 0; i < n; i++) { e->cap[e->cap_pos] = e->cin_mono[i]; e->cap_pos = e->cap_pos + 1 == e->cap_len ? 0 : e->cap_pos + 1; }
+    }
     for (int k = 0; k < 2; k++) {
         float hz = P(e, k ? MFO_P_LFO2_RATE : MFO_P_LFO1_RATE);
         e->lfo_ph[k] += hz * dt; e->lfo_ph[k] -= floorf(e->lfo_ph[k]);
@@ -884,7 +1062,9 @@ static void render_chunk(mfo_engine_t *e, float *outl, float *outr, int n)
     e->t += n;
 }
 
-void mfo_render(mfo_engine_t *e, float *left, float *right, int n)
+void mfo_render(mfo_engine_t *e, float *left, float *right, int n) { mfo_render_input(e, NULL, NULL, left, right, n); }
+
+void mfo_render_input(mfo_engine_t *e, const float *in_l, const float *in_r, float *left, float *right, int n)
 {
 #ifdef MFO_HAVE_SSE
     unsigned csr = _mm_getcsr();
@@ -894,7 +1074,7 @@ void mfo_render(mfo_engine_t *e, float *left, float *right, int n)
     while (done < n) {
         int room = MFO_BLOCK - (int)(e->t % MFO_BLOCK);
         int m = n - done < room ? n - done : room;
-        render_chunk(e, left + done, right + done, m);
+        render_chunk(e, in_l ? in_l + done : NULL, in_r ? in_r + done : (in_l ? in_l + done : NULL), left + done, right + done, m);
         done += m;
     }
 #ifdef MFO_HAVE_SSE

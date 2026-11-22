@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Vintage Chonk user guide: pictures + PDF (needs Pillow and PyMuPDF, so no -I: they live in the user site).
+# Atomic Lounge user guide: pictures + PDF (needs Pillow and PyMuPDF, so no -I: they live in the user site).
 #   python docs/guide/build_guide.py            screens, PDF, page previews
 #   python docs/guide/build_guide.py --no-shots  reuse docs/guide/img as it is
 # 1. builds tools/guide_shots (the real panel UI on the desktop emulation, MSYS2 UCRT64 gcc) and
@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 GCC = r"C:\msys64\ucrt64\bin\gcc.exe"
-PDF = os.path.join(HERE, "Vintage-Chonk-User-Guide.pdf")
+PDF = os.path.join(HERE, "Atomic-Lounge-User-Guide.pdf")   # 1.2.0: renamed (Atomic Lounge, formerly Vintage Chonk); the old PDF is left as it was
 SRC = os.path.join(HERE, "guide.html")
 TMP = os.path.join(ROOT, "build", "guide")
 
@@ -78,7 +78,7 @@ def orbit_shots():
         w = min(im.width, 2000)
         im.resize((w, int(im.height * w / im.width)), Image.LANCZOS).save(
             os.path.join(out, f.replace("orbit_", "", 1).replace(".png", ".jpg")), quality=86)
-    cands = [os.path.join(ROOT, "plugin", d, "test_out", "editor_orbit_1440x900.png") for d in ("build", "build-dev")]
+    cands = [os.path.join(ROOT, "plugin", d, "test_out", "editor_orbit_1440x900.png") for d in ("build", "build-dev", "test_out_saved/build", "test_out_saved/build-dev")]
     cands = sorted((c for c in cands if os.path.exists(c)), key=os.path.getmtime, reverse=True)
     if cands:
         Image.open(cands[0]).convert("RGB").save(os.path.join(out, "plugin_window.jpg"), quality=88)
@@ -126,7 +126,7 @@ KX = 50          # left edge of the first white key
 
 
 def svg_panel():
-    """The FM-1 panel under Vintage Chonk, drawn from a photo of the unit (docs/FM1_UI_DESIGN.md, verified layout)."""
+    """The FM-1 panel under the firmware, drawn from a photo of the unit (docs/FM1_UI_DESIGN.md, verified layout)."""
     blk = [0, 1, 2, 4, 5, 7, 8, 9, 11, 12, 14]          # black key i sits between white keys i and i+1
     leg = ["OP1", "OP2", "OP3", "OP4", "OP5", "OP6", "PIT", "GLO", "MONO", "POLY", ""]
     mean = ["OSC 1", "OSC 2", "OSC 3", "MOD OSC", "NOISE", "FILTERS", "PITCH", "VOICE", "MONO", "POLY", "MACROS"]

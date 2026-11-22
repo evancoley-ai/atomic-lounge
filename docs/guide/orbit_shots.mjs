@@ -16,7 +16,7 @@ const OUT = path.resolve(process.argv[2] || path.join(ROOT, 'build/guide/orbit_r
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((c) => fs.existsSync(c));
 if (!CHROME) { console.log('no Chrome / Edge'); process.exit(1); }
-const cands = ['plugin/build/test_out/orbit_panel_state.json', 'plugin/build-dev/test_out/orbit_panel_state.json']
+const cands = ['plugin/build/test_out/orbit_panel_state.json', 'plugin/build-dev/test_out/orbit_panel_state.json', 'plugin/test_out_saved/build/test_out/orbit_panel_state.json', 'plugin/test_out_saved/build-dev/test_out/orbit_panel_state.json']
   .map((p) => path.join(ROOT, p)).filter((p) => fs.existsSync(p)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
 if (!cands.length) { console.log('no orbit_panel_state.json: run the host test first (plugin\\build.ps1 -Test)'); process.exit(1); }
 const fixture = JSON.parse(fs.readFileSync(cands[0], 'utf8'));

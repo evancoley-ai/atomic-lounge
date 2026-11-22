@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk plugin: the audio processor (engines, host parameters, state, programs).
-// Two modes: CHONK (the 1.0.0 synth, EngineRunner) and ORBIT (the poly-convolution engine, orbit::Runner).
+// Atomic Lounge plugin (formerly Vintage Chonk): the audio processor (engines, host parameters, state, programs).
+// Two modes: REGOLITH (internally 'chonk': the 1.0.0 synth, EngineRunner) and ORBIT (the poly-convolution engine,
+// orbit::Runner).
+// Buses (1.2.0): one stereo audio INPUT bus "Sidechain" (input bus 0, VST3 bus type kAux, active by default; mono
+// and disabled accepted) for the ORBIT live input, and the stereo (or mono) output. REGOLITH ignores the input.
 // The mode is part of the plugin state; switching cross-fades the engines (30 ms) and reports the new
 // latency to the host.
 #pragma once
@@ -29,7 +32,8 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Vintage Chonk"; }
+    const juce::String getName() const override { return "Atomic Lounge"; }
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return &vst3Ext; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -119,7 +123,14 @@ private:
     int audioMode = chonk;          // audio thread: what is rendering
     int fadePos = 0, fadeLen = 1;
     std::vector<float> scratch[2];
+    std::vector<float> inScratch[2];       // the sidechain input, copied before the output overwrites the shared buffer
     double fs = 44100.0;
+
+    // the input bus is a sidechain (VST3 kAux), not a main input: DAWs offer it as "Audio From" / sidechain routing
+    struct Vst3Ext final : juce::VST3ClientExtensions
+    {
+        bool getPluginHasMainInput() const override { return false; }
+    } vst3Ext;
 
     std::vector<mfm1::MidiEvent> events;   // reserved in prepareToPlay; never grows on the audio thread
 

@@ -55,6 +55,17 @@ void mfo_kernel_destroy(mfo_kernel_t *k);
 int mfo_kernel_length(const mfo_kernel_t *k);
 int mfo_kernel_channels(const mfo_kernel_t *k);
 
+/* In-place kernels (1.2.0, the live INPUT impulse): mfo_kernel_alloc makes an empty mono or stereo kernel with
+ * room for max_len taps (allocates); a loader rebuilds a mono kernel from new taps a few FFT partitions at a time
+ * without allocating (audio thread). The kernel must not be given to a convolver until mfo_kload_step returns 1;
+ * ir must stay valid until then. */
+mfo_kernel_t *mfo_kernel_alloc(int channels, int max_len);
+typedef struct mfo_kload mfo_kload_t;
+mfo_kload_t *mfo_kload_create(int max_len);
+void mfo_kload_destroy(mfo_kload_t *l);
+void mfo_kload_begin(mfo_kload_t *l, mfo_kernel_t *k, const float *ir, int len, float gain);
+int mfo_kload_step(mfo_kload_t *l, int max_parts);       /* 1 = finished */
+
 typedef struct mfo_conv mfo_conv_t;
 /* in_channels 1 or 2, max_len = longest kernel it will run. Output always 2 channels:
  * mono in + stereo kernel = mono-to-stereo; stereo in + mono kernel = both through the same IR;
@@ -141,6 +152,7 @@ typedef struct {
     int stft_size, stft_hop;     /* default 1024 / 128 */
     int spectral;                /* 1 = TONE/GRAIN/PITCH/MOTION available (latency 2*hop); 0 = BODY only, zero latency */
     uint32_t seed;
+    int live_input;              /* 1 = memory for the live INPUT impulse (BODY on the input, 1.2.0; default 1) */
 } mfo_config_t;
 void mfo_config_default(mfo_config_t *c);
 
@@ -170,6 +182,29 @@ void mfo_set_tempo(mfo_engine_t *e, float bpm);
 /* render n frames (any n) of stereo float output */
 void mfo_render(mfo_engine_t *e, float *left, float *right, int n);
 unsigned mfo_active_voices(const mfo_engine_t *e);
+
+/* ---- live INPUT (1.2.0): the host's sidechain audio as a layer's SOURCE and / or IMPULSE ----------------
+ * mfo_render_input = mfo_render with n frames of input alongside (in_l / in_r may be NULL = silence; in_r NULL
+ * with in_l set = mono). Nothing changes for a layer that does not use the input, so without INPUT the output is
+ * identical to mfo_render.
+ *  SOURCE INPUT: the layer's bus is the input (instead of its sample / synth voices); gate THRU = always through,
+ *    NOTE = through the layer's amp envelope (ATTACK/DECAY/SUSTAIN/RELEASE, VEL SENS) opened by held notes.
+ *  IMPULSE INPUT: TONE / GRAIN / PITCH / MOTION use the input (mono) as the modulator; BODY convolves the bus with
+ *    the last `window` seconds of the input (0.05..MFO_INPUT_MAX_SECONDS), captured continuously: a new kernel is
+ *    built in place every refresh (a few partitions per 64-sample tick), warmed up on a second convolver and then
+ *    cross-faded in (MFO_INPUT_XFADE samples), unit energy (quiet input below about -50 dBFS RMS stays quiet).
+ *    KEYTRACK does not apply to it. */
+#define MFO_INPUT_MAX_SECONDS 1.0f
+#define MFO_INPUT_XFADE 2048
+void mfo_render_input(mfo_engine_t *e, const float *in_l, const float *in_r, float *left, float *right, int n);
+void mfo_layer_set_input(mfo_engine_t *e, int layer, int src_input, int imp_input, int gate_note, float window_seconds);
+void mfo_set_input_gain(mfo_engine_t *e, float gain);    /* linear trim applied to the input everywhere (default 1) */
+/* samples from a change of the input to the start / end of its effect on a BODY-INPUT kernel (for reporting) */
+int mfo_input_body_delay(const mfo_engine_t *e, int layer, int *full);
+/* held puck (1.2.0): wobble used while ORBIT PATH is 0 (held); < 0 = ORBIT WOBBLE as in 1.1.0 (default) */
+void mfo_set_held_wobble(mfo_engine_t *e, float wobble);
+/* freeze the orbit path phase (RATE at its minimum = stopped; default off) */
+void mfo_set_orbit_freeze(mfo_engine_t *e, int on);
 
 /* ------------------------------------------------------------ parameters --- */
 /* Global parameters, then MFO_LAYERS blocks of layer parameters: id = MFO_LPARAM(layer, MFO_L_xxx). */

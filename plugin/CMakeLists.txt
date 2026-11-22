@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Vintage Chonk VST3 instrument (Windows): the dsp/ engine + the tablet's web panel in a JUCE 8 WebView2.
+# Atomic Lounge (formerly Vintage Chonk) VST3 instrument (Windows): the dsp/ engine + the tablet's web panel in a JUCE 8 WebView2.
 #   powershell -ExecutionPolicy Bypass -File plugin\build.ps1
 cmake_minimum_required(VERSION 3.22)
-project(VintageChonk VERSION 1.1.0 LANGUAGES C CXX)   # the version (JucePlugin_VersionString); 1.1.0 = CHONK + ORBIT
+project(VintageChonk VERSION 1.2.0 LANGUAGES C CXX)   # the version (JucePlugin_VersionString); 1.2.0 = Atomic Lounge (formerly Vintage Chonk): REGOLITH + ORBIT, live input
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,13 +81,14 @@ endif()
 
 # -------------------------------------------------------------------------------- plugin ---
 juce_add_plugin(VintageChonk
-    PRODUCT_NAME "Vintage Chonk"
+    PRODUCT_NAME "Atomic Lounge"
     COMPANY_NAME "Coley"
     COMPANY_COPYRIGHT "Copyright (c) 2026 evancoley-ai. AGPL-3.0"
+    COMPANY_WEBSITE "https://github.com/evancoley-ai/atomic-lounge"   # source code (AGPL-3.0); the old vintage-chonk URL redirects
     BUNDLE_ID "com.coley.vintagechonk"
     PLUGIN_MANUFACTURER_CODE Cly1
     PLUGIN_CODE Mfm1
-    DESCRIPTION "Vintage Chonk: analog-style synth with the ORBIT poly-convolution engine"
+    DESCRIPTION "Atomic Lounge: analog-style synth (REGOLITH) with the ORBIT poly-convolution engine and live input"
     FORMATS VST3 Standalone
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
@@ -105,6 +106,7 @@ target_sources(VintageChonk PRIVATE
     ${ORBIT_SOURCES}
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/WebView2Probe.cpp
     src/PresetStore.cpp)
 target_include_directories(VintageChonk PRIVATE src generated "${WEBVIEW2_DIR}/include")
 target_compile_definitions(VintageChonk PUBLIC
@@ -135,7 +137,7 @@ target_compile_definitions(VintageChonkHostTest PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_MODAL_LOOPS_PERMITTED=1
-    MFM1_VST3_PATH="${CMAKE_CURRENT_SOURCE_DIR}/dist/Vintage Chonk.vst3")
+    MFM1_VST3_PATH="${CMAKE_CURRENT_SOURCE_DIR}/dist/Atomic Lounge.vst3")
 target_link_libraries(VintageChonkHostTest
     PRIVATE
         mfe_dsp

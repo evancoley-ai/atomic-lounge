@@ -1,4 +1,4 @@
-Vintage Chonk
+Atomic Lounge (formerly Vintage Chonk)
 Copyright (C) 2026 evancoley-ai
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero
@@ -24,7 +24,7 @@ repository; versions and checksums are pinned in that script)
 
 JUCE 8.0.15 - https://github.com/juce-framework/JUCE
   Copyright (c) Raw Material Software Limited. Used under the GNU Affero General Public License v3
-  (JUCE's open-source licence option). This is why a distributed Vintage Chonk plugin binary is licensed
+  (JUCE's open-source licence option). This is why a distributed Atomic Lounge plugin binary is licensed
   under AGPLv3 and comes with its complete source (this repository).
   MODIFIED: one file, modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp, is changed by
   plugin/patches/juce-8.0.15-vst3-hidden-midi-cc-params.patch (the MIDI CC emulation parameters are
@@ -75,7 +75,7 @@ Trademarks
 -------------------------------------------------------------------------------------------------------------
 
 Native Instruments and Massive are trademarks of Native Instruments GmbH. Moog is a trademark of Moog Music
-Inc. M-VAVE and FM-1 belong to their owner. Chroma Console is a product of Hologram Electronics. Vintage
-Chonk is an independent project, not affiliated with or endorsed by any of them; these names are used only to
-describe compatibility (Vintage Chonk converts Native Instruments Massive .nmsv presets and has firmware that
+Inc. M-VAVE and FM-1 belong to their owner. Chroma Console is a product of Hologram Electronics. Atomic
+Lounge is an independent project, not affiliated with or endorsed by any of them; these names are used only to
+describe compatibility (Atomic Lounge converts Native Instruments Massive .nmsv presets and has firmware that
 runs on the M-VAVE FM-1).

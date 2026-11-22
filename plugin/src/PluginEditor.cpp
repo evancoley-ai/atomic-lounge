@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "PluginEditor.h"
 #include "PresetStore.h"
+#include "WebView2Probe.h"
 #include "MFM1Www.h"
 
 static juce::String quoted (const juce::String& s) { return juce::JSON::toString (juce::var (s)); }
@@ -19,30 +20,116 @@ static std::map<juce::String, std::pair<const char*, int>> wwwFiles()
 }
 
 VintageChonkEditor::VintageChonkEditor (VintageChonkProcessor& p)
-    : AudioProcessorEditor (p), proc (p), files (wwwFiles()), browser (options())
+    : AudioProcessorEditor (p), proc (p), files (wwwFiles())
 {
-    addAndMakeVisible (browser);
     seenRestore = proc.restoreSerial();
+    fallbackText.setJustificationType (juce::Justification::centred);
+    fallbackText.setColour (juce::Label::textColourId, juce::Colour (0xfff3e9d2));
+    fallbackText.setFont (juce::FontOptions (17.0f));
+    addChildComponent (fallbackText);
+    retry.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffc8642a));
+    retry.setColour (juce::TextButton::textColourOffId, juce::Colour (0xfff3e9d2));
+    retry.onClick = [this] { startPanel(); };
+    addChildComponent (retry);
     // both panels are drawn for 16:10 (1920 x 1200 and 1600 x 1000) and scale to fit: keep that shape
     setResizable (true, true);
     setResizeLimits (720, 450, 3840, 2400);
     if (auto* c = getConstrainer()) c->setFixedAspectRatio (1920.0 / 1200.0);
     setSize (1440, 900);
-    showMode();
+    dataFolder = mfm1::WebView2Probe::dataFolder();
+    testStatus ("folder " + dataFolder.getFullPathName());
+    startPanel();
     startTimerHz (30);
 }
 
 VintageChonkEditor::~VintageChonkEditor() { stopTimer(); }
 
-void VintageChonkEditor::paint (juce::Graphics& g) { g.fillAll (juce::Colour (0xff141312)); }
-void VintageChonkEditor::resized() { browser.setBounds (getLocalBounds()); }
+void VintageChonkEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xff141312));
+    if (ui == Ui::probing || (ui == Ui::loading && browser == nullptr))
+    {
+        g.setColour (juce::Colour (0xff8a8175));
+        g.setFont (juce::FontOptions (16.0f));
+        g.drawText ("ATOMIC LOUNGE  -  opening the panel ...", getLocalBounds(), juce::Justification::centred);
+    }
+}
+
+void VintageChonkEditor::resized()
+{
+    if (browser != nullptr) browser->setBounds (getLocalBounds());
+    auto b = getLocalBounds().reduced (getWidth() / 8, getHeight() / 5);
+    retry.setBounds (b.removeFromBottom (44).withSizeKeepingCentre (160, 40));
+    fallbackText.setBounds (b);
+}
+
+void VintageChonkEditor::testStatus (const juce::String& line) const
+{
+    const auto f = juce::SystemStats::getEnvironmentVariable ("ATOMIC_LOUNGE_TEST_STATUS", {});
+    if (f.isNotEmpty()) juce::File (f).appendText (line + "\n");
+}
+
+void VintageChonkEditor::startPanel()
+{
+    // (re)start: drop a browser that never answered, probe WebView2 in this host's folder, then make the panel
+    browser.reset();
+    fallbackText.setVisible (false);
+    retry.setVisible (false);
+    ui = Ui::probing;
+    attempt++;
+    repaint();
+    juce::WeakReference<VintageChonkEditor> weak (this);
+    const int a = attempt;
+    mfm1::WebView2Probe::run (dataFolder,
+                              [weak, a] (bool ok, const juce::String& step, long hr)
+                              {
+                                  if (weak != nullptr && weak->attempt == a) weak->probeDone (ok, step, hr);
+                              });
+}
+
+void VintageChonkEditor::probeDone (bool ok, const juce::String& step, long hr)
+{
+    if (! ok)
+    {
+        showFallback ("WebView2 could not start (" + step + ").", hr);
+        return;
+    }
+    testStatus ("probe ok");
+    browser = std::make_unique<juce::WebBrowserComponent> (options());
+    addAndMakeVisible (*browser);
+    browser->toBack();
+    ui = Ui::loading;
+    loadStart = juce::Time::getMillisecondCounter();
+    resized();
+    showMode();
+}
+
+void VintageChonkEditor::showFallback (const juce::String& why, long hr)
+{
+    browser.reset();
+    ui = Ui::failed;
+    const auto runtime = mfm1::WebView2Probe::runtimeVersion();
+    fallbackText.setText ("The Atomic Lounge panel could not open.\n\n" + why + "\n"
+                              + (hr != 0 ? "HRESULT " + mfm1::WebView2Probe::describe (hr) + "\n" : juce::String())
+                              + "\nWebView2 runtime: " + (runtime.isNotEmpty() ? runtime : juce::String ("not installed"))
+                              + "\nData folder: " + dataFolder.getFullPathName()
+                              + "\n\nThe sound keeps playing; parameters can still be automated from the host."
+                              + "\nClose other programs that show this panel, or press Retry.",
+                          juce::dontSendNotification);
+    fallbackText.setVisible (true);
+    retry.setVisible (true);
+    testStatus ("fallback " + why + " hr=0x" + juce::String::toHexString ((juce::uint32) hr).paddedLeft ('0', 8).toUpperCase());
+    resized();
+    repaint();
+}
 
 void VintageChonkEditor::showMode()
 {
     seenMode = proc.modeSerial();
     orbitPage = false;
+    if (browser == nullptr) return;
     const auto root = juce::WebBrowserComponent::getResourceProviderRoot();
-    browser.goToURL (proc.mode() == VintageChonkProcessor::orbitMode ? root + "orbit.html" : root);
+    browser->goToURL (proc.mode() == VintageChonkProcessor::orbitMode ? root + "orbit.html" : root);
 }
 
 juce::WebBrowserComponent::Options VintageChonkEditor::options()
@@ -55,8 +142,6 @@ juce::WebBrowserComponent::Options VintageChonkEditor::options()
     const char* shim = MFM1Www::getNamedResource ("desktop_shim_js", n);
     const juce::String script = "window.MFHostInit = " + json (juce::var (init)) + ";\n" + juce::String::fromUTF8 (shim, n);
 
-    const auto dataFolder = juce::File::getSpecialLocation (juce::File::windowsLocalAppData)
-                                .getChildFile ("Vintage Chonk").getChildFile ("WebView2");
     dataFolder.createDirectory();
     using O = juce::WebBrowserComponent::Options;
     return O {}
@@ -111,6 +196,12 @@ void VintageChonkEditor::pushOrbitState()
 
 void VintageChonkEditor::timerCallback()
 {
+    if (browser == nullptr) return;
+    if (ui == Ui::loading && juce::Time::getMillisecondCounter() - loadStart > 20000)
+    {
+        showFallback ("The panel page did not answer within 20 s (WebView2 started, but no page arrived).", 0);
+        return;
+    }
     if (proc.modeSerial() != seenMode) { showMode(); return; }
     if (orbitPage)
     {
@@ -181,6 +272,8 @@ void VintageChonkEditor::onPanelEvent (const juce::var& v)
     else if (op == "mode") proc.setMode (arg (0).toString() == "orbit" ? VintageChonkProcessor::orbitMode : VintageChonkProcessor::chonk);
     else if (op == "hello")
     {
+        if (ui != Ui::ready) testStatus ("loaded regolith");
+        ui = Ui::ready;
         orbitPage = false;
         pushPresets();
         pushRestore();
@@ -192,6 +285,8 @@ void VintageChonkEditor::onOrbitEvent (const juce::String& op, const juce::Array
     auto arg = [&a] (int i) { return i < a.size() ? a[i] : juce::var(); };
     if (op == "o.hello")
     {
+        if (ui != Ui::ready) testStatus ("loaded orbit");
+        ui = Ui::ready;
         orbitPage = true;
         pushOrbitState();
         return;

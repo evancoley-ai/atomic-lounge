@@ -9,10 +9,17 @@ juce::File PresetStore::oldFolder()
                .getChildFile ("Moosive FM-1").getChildFile ("presets");   // legacy name: pre-rename folder, read once
 }
 
+juce::File PresetStore::dataFolder (const juce::String& sub)
+{
+    const auto app = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+    const auto now = app.getChildFile ("Atomic Lounge").getChildFile (sub);
+    const auto before = app.getChildFile ("Vintage Chonk").getChildFile (sub);   // 1.0.0 / 1.1.0 folder
+    return now.isDirectory() || ! before.isDirectory() ? now : before;
+}
+
 juce::File PresetStore::folder()
 {
-    auto d = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                 .getChildFile ("Vintage Chonk").getChildFile ("presets");
+    auto d = dataFolder ("presets");
     d.createDirectory();
     migrate (oldFolder(), d);
     return d;

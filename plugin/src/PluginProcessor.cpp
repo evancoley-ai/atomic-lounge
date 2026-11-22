@@ -22,7 +22,8 @@ static bool factoryPatch (int i, mfe_patch_t& p)
 }
 
 VintageChonkProcessor::VintageChonkProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+    : AudioProcessor (BusesProperties().withInput ("Sidechain", juce::AudioChannelSet::stereo(), true)
+                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
     mfe_patch_t p;
     if (! factoryPatch (0, p)) mfe_patch_init (&p);
@@ -44,8 +45,8 @@ VintageChonkProcessor::VintageChonkProcessor()
         const auto& h = hp[(size_t) i];
         auto attrs = juce::AudioParameterFloatAttributes().withStringFromValueFunction (
             [this, i] (float v, int) { return orbit::hostText (orbit::hostParams()[(size_t) i], v, osync.load()); });
-        auto* prm = new juce::AudioParameterFloat (juce::ParameterID { h.id, 2 }, h.name,
-                                                   juce::NormalisableRange<float> (0.0f, 1.0f),
+        auto* prm = new juce::AudioParameterFloat (juce::ParameterID { h.id, h.target >= orbit::spMotion && h.map == orbit::Map::special ? 3 : 2 }, h.name,
+                                                   juce::NormalisableRange<float> (0.0f, 1.0f, h.stepped ? 1.0f : 0.0f),
                                                    orbit::hostNormFromSettings (h, osettings), attrs);
         oparams.push_back (prm);
         addParameter (prm);
@@ -68,6 +69,7 @@ void VintageChonkProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     runner.prepare (sampleRate, samplesPerBlock);
     orbit.prepare (sampleRate, samplesPerBlock);
     for (auto& s : scratch) s.assign ((size_t) std::max (4096, samplesPerBlock), 0.0f);
+    for (auto& s : inScratch) s.assign ((size_t) std::max (8192, 2 * samplesPerBlock), 0.0f);
     audioMode = targetMode.load();
     fadePos = 0;
     fadeLen = std::max (1, (int) (0.03 * fs));
@@ -83,7 +85,13 @@ void VintageChonkProcessor::reset()
 
 bool VintageChonkProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    if (layouts.inputBuses.size() > 0 && ! layouts.getMainInputChannelSet().isDisabled()) return false;
+    // the sidechain: stereo, mono or switched off; the output: stereo or mono
+    if (layouts.inputBuses.size() > 1) return false;
+    if (layouts.inputBuses.size() == 1)
+    {
+        const auto in = layouts.inputBuses.getReference (0);
+        if (! (in.isDisabled() || in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono())) return false;
+    }
     const auto out = layouts.getMainOutputChannelSet();
     return out == juce::AudioChannelSet::stereo() || out == juce::AudioChannelSet::mono();
 }
@@ -127,14 +135,32 @@ void VintageChonkProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         std::memcpy (e.bytes, meta.data, (size_t) meta.numBytes);
         events.push_back (e);
     }
-    float* l = buffer.getNumChannels() > 0 ? buffer.getWritePointer (0) : nullptr;
-    float* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+    // the sidechain input shares channels with the output: copied out first (ORBIT only; REGOLITH ignores it)
+    const float* inL = nullptr;
+    const float* inR = nullptr;
+    if (getBusCount (true) > 0 && (targetMode.load() == orbitMode || audioMode == orbitMode) && n <= (int) inScratch[0].size())
+    {
+        const auto in = getBusBuffer (buffer, true, 0);
+        if (in.getNumChannels() > 0)
+        {
+            std::memcpy (inScratch[0].data(), in.getReadPointer (0), sizeof (float) * (size_t) n);
+            inL = inScratch[0].data();
+            if (in.getNumChannels() > 1)
+            {
+                std::memcpy (inScratch[1].data(), in.getReadPointer (1), sizeof (float) * (size_t) n);
+                inR = inScratch[1].data();
+            }
+        }
+    }
+    const int outCh = getBusCount (false) > 0 ? getChannelCountOfBus (false, 0) : 0;
+    float* l = outCh > 0 ? buffer.getWritePointer (0) : nullptr;
+    float* r = outCh > 1 ? buffer.getWritePointer (1) : nullptr;
     for (int i = 0; i < (int) oparams.size(); i++) orbit.setHostNorm (i, oparams[(size_t) i]->get());
 
     auto render = [&] (int m, float* a, float* b)
     {
         if (m == chonk) runner.process (a, b, n, events.data(), (int) events.size());   // b == nullptr: mono (L+R)/2 into a
-        else orbit.process (a, b, n, events.data(), (int) events.size());
+        else orbit.process (a, b, inL, inR, n, events.data(), (int) events.size());
     };
     const int target = targetMode.load();
     if (target == audioMode)
@@ -176,7 +202,7 @@ void VintageChonkProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             fadePos = 0;
         }
     }
-    for (int c = 2; c < buffer.getNumChannels(); c++) buffer.clear (c, 0, n);
+    for (int c = std::max (1, outCh); c < buffer.getNumChannels(); c++) buffer.clear (c, 0, n);
 }
 
 // ------------------------------------------------------------------------------------- modes ---
@@ -455,7 +481,8 @@ void VintageChonkProcessor::orbitPushRunner()
         s = osettings;
     }
     for (int i = 0; i < orbit::numCore; i++) orbit.setCore (i, s.core[(size_t) i]);
-    orbit.setPath (s.path, s.sync, s.drawn);
+    orbit.setPath (s.path != orbit::pathHold ? s.path : s.shape, s.sync, s.drawn);
+    orbit.setExtras (s.legacyWobble, s.inWindow);
     orbit.setFx (s.fxOn, s.ensMode, s.revType, s.bbdSync, s.oilSync);
     orbit.setMods (s.mods);
     osync.store (s.sync);
@@ -528,6 +555,32 @@ juce::var VintageChonkProcessor::orbitView (int l)
     }
     o->setProperty ("impPeaks", peaks (ip));
     o->setProperty ("impTrace", impTrace);
+    {
+        const auto& hp = orbit::hostParams();
+        auto on = [&] (int sp) { const int i = orbit::hostIndexForSpecial (sp); return i >= 0 && oparams[(size_t) i]->get() > 0.5f; };
+        juce::ignoreUnused (hp);
+        if (on (orbit::spSrcIn0 + l))
+        {
+            o->setProperty ("srcName", "LIVE INPUT");
+            o->setProperty ("srcSub", juce::String::fromUTF8 ("SIDECHAIN \xc2\xb7 ") + (on (orbit::spGate0 + l) ? "NOTE GATE" : "THRU"));
+            o->setProperty ("srcPeaks", juce::Array<juce::var>());
+            o->setProperty ("srcTrace", false);
+            o->setProperty ("srcError", "");
+        }
+        if (on (orbit::spImpIn0 + l))
+        {
+            float w;
+            {
+                const juce::ScopedLock sl (lock);
+                w = osettings.inWindow[l];
+            }
+            o->setProperty ("impName", "LIVE INPUT");
+            o->setProperty ("impSub", juce::String::fromUTF8 ("SIDECHAIN \xc2\xb7 ") + juce::String ((int) std::lround (w * 1000.0f)) + " ms WINDOW");
+            o->setProperty ("impPeaks", juce::Array<juce::var>());
+            o->setProperty ("impTrace", false);
+            o->setProperty ("impError", "");
+        }
+    }
     return juce::var (o);
 }
 
@@ -617,6 +670,12 @@ juce::var VintageChonkProcessor::orbitMeter()
     o->setProperty ("pk", juce::Array<juce::var> { m.peakL, m.peakR });
     o->setProperty ("midi", (int) orbit.midiCount());
     o->setProperty ("mode", mode() == orbitMode ? "orbit" : "chonk");
+    o->setProperty ("in", juce::Array<juce::var> { m.inL, m.inR, m.inPk });
+    // the bus as the host has it (the audio thread reports 0 while nothing arrives, e.g. REGOLITH or no bus)
+    int inCh = getBusCount (true) > 0 ? getChannelCountOfBus (true, 0) : 0;
+    if (auto* b = getBus (true, 0)) if (! b->isEnabled()) inCh = 0;
+    o->setProperty ("inCh", inCh);
+    o->setProperty ("inLatencyMs", fs > 0 ? orbit.latencySamples() * 1000.0 / fs : 0.0);
     return juce::var (o);
 }
 
@@ -660,7 +719,7 @@ juce::String VintageChonkProcessor::loadSampleFile (int l, bool impulse, const j
 
 juce::String VintageChonkProcessor::loadSampleBytes (int l, bool impulse, const juce::String& name, const juce::MemoryBlock& data)
 {
-    // dropped on the panel: kept in %APPDATA%\Vintage Chonk\samples so the project can reference it by path
+    // dropped on the panel: kept in %APPDATA%\Atomic Lounge\samples (or the 1.1.0 folder) so the project can reference it by path
     auto dir = orbit::droppedFolder();
     dir.createDirectory();
     const auto safe = juce::File::createLegalFileName (name.isNotEmpty() ? name : juce::String ("dropped.wav"));
@@ -700,11 +759,45 @@ juce::var VintageChonkProcessor::orbitOp (const juce::String& op, const juce::Ar
             orbit.setCore (id, v);
         }
     }
-    else if (op == "o.path" || op == "o.sync" || op == "o.drawn")
+    else if (op == "o.motion" || op == "o.park")
+    {
+        // motion on / off; park: the puck where the hand put it, motion off (the panel's drag while it moves)
+        const bool on = op == "o.motion" && (bool) arg (0);
+        if (op == "o.park")
+        {
+            const auto& hp = orbit::hostParams();
+            const int hx = orbit::hostIndexForCore (MFO_P_PUCK_X), hy = orbit::hostIndexForCore (MFO_P_PUCK_Y);
+            if (hx >= 0) setOrbitHost (hx, orbit::normFromCore (hp[(size_t) hx], (float) (double) arg (0)));
+            if (hy >= 0) setOrbitHost (hy, orbit::normFromCore (hp[(size_t) hy], (float) (double) arg (1)));
+        }
+        {
+            const juce::ScopedLock sl (lock);
+            if (osettings.path != orbit::pathHold) osettings.shape = osettings.path;
+            osettings.path = on ? osettings.shape : (int) orbit::pathHold;
+        }
+        setOrbitHost (orbit::hostIndexForSpecial (orbit::spMotion), on ? 1.0f : 0.0f);
+        orbitPushRunner();
+    }
+    else if (op == "o.window")
     {
         {
             const juce::ScopedLock sl (lock);
-            if (op == "o.path") osettings.path = juce::jlimit (0, 3, (int) arg (0));
+            osettings.inWindow[l] = orbit::windowFromChoice ((float) (double) arg (1));
+        }
+        orbitPushRunner();
+    }
+    else if (op == "o.path" || op == "o.sync" || op == "o.drawn")
+    {
+        bool motionOn = false, motionSet = false;
+        {
+            const juce::ScopedLock sl (lock);
+            if (op == "o.path")
+            {
+                osettings.path = juce::jlimit (0, 3, (int) arg (0));
+                if (osettings.path != orbit::pathHold) osettings.shape = osettings.path;
+                motionOn = osettings.path != orbit::pathHold;
+                motionSet = true;
+            }
             else if (op == "o.sync") osettings.sync = (bool) arg (0);
             else if (const auto* pts = arg (0).getArray())
             {
@@ -718,8 +811,11 @@ juce::var VintageChonkProcessor::orbitOp (const juce::String& op, const juce::Ar
                     d.n++;
                 }
                 osettings.path = orbit::pathDrawn;
+                osettings.shape = orbit::pathDrawn;
+                motionOn = motionSet = true;
             }
         }
+        if (motionSet) setOrbitHost (orbit::hostIndexForSpecial (orbit::spMotion), motionOn ? 1.0f : 0.0f);
         orbitPushRunner();
     }
     else if (op == "o.fx" || op == "o.fxopt")

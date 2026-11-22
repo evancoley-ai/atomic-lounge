@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk VST3 (Windows): the tablet panel's native bridge, for the plugin's WebView2.
+// Atomic Lounge (formerly Vintage Chonk) VST3 (Windows): the tablet panel's native bridge, for the plugin's WebView2.
 // Injected before the page's scripts (JUCE user script, after window.MFHostInit = {...}), so bridge.js
 // finds window.AndroidSynth exactly as on the tablet. The tablet's calls are synchronous; JUCE's
 // messages to native code are not, so calls are sent as events ('mfm1' {op, a}) and the answers the
@@ -80,7 +80,7 @@
   // a page reload (or a late start) asks for the current state again
   if (!isOrbitPage) window.addEventListener('DOMContentLoaded', () => { send('hello', []); addModeSwitch(); });
 
-  // the CHONK | ORBIT mode switch (plugin only): in the panel foot, where the tablet shows its feature line
+  // the REGOLITH | ORBIT mode switch (internal value 'chonk') (plugin only): in the panel foot, where the tablet shows its feature line
   function addModeSwitch() {
     const foot = document.getElementById('panel-foot');
     if (!foot || document.getElementById('mode-switch')) return;
@@ -97,8 +97,8 @@
     document.head.appendChild(st);
     const sw = document.createElement('div');
     sw.id = 'mode-switch';
-    sw.title = 'Switch engine: CHONK (wavetable synth) or ORBIT (poly-convolution)';
-    sw.innerHTML = '<div class="in"><b class="on" data-m="chonk">CHONK</b><b data-m="orbit">ORBIT</b></div>';
+    sw.title = 'Switch engine: REGOLITH (wavetable synth) or ORBIT (poly-convolution)';
+    sw.innerHTML = '<div class="in"><b class="on" data-m="chonk">REGOLITH</b><b data-m="orbit">ORBIT</b></div>';
     sw.addEventListener('pointerdown', (e) => {
       const b = e.target.closest('b');
       if (!b || b.classList.contains('on')) return;
@@ -106,6 +106,14 @@
       send('mode', [b.dataset.m]);
     });
     foot.appendChild(sw);
+    // the plugin's name (Atomic Lounge) and mode name (REGOLITH) on the tablet panel's foot: plugin only
+    const title = foot.querySelector('.title');
+    if (title) title.textContent = 'ATOMIC LOUNGE';
+    const hold = document.getElementById('title-hold');
+    if (hold) hold.setAttribute('aria-label', 'Atomic Lounge (hold 3 seconds for settings)');
+    const sub = foot.querySelector('.subtitle');
+    if (sub) sub.textContent = 'REGOLITH · WAVETABLE · ANALOG STYLE';
+    document.title = 'Atomic Lounge';
   }
 
   // ---- desktop extras ----------------------------------------------------------------------------

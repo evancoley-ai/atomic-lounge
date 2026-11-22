@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk VST3 host test: loads the built plugin the way a DAW does (JUCE's VST3 hosting), plays
+// Atomic Lounge (formerly Vintage Chonk) VST3 host test: loads the built plugin the way a DAW does (JUCE's VST3 hosting), plays
 // MIDI into it at 44.1 / 48 / 96 kHz with block sizes 32 / 64 / 441 / 512 / 1024 and checks:
 //   * sound: non-silent, finite, no overload;
 //   * block boundaries: every block size gives the same output (bit for bit), and at 44.1 kHz the
@@ -12,7 +12,11 @@
 //   * the VST3 parameter list a DAW shows: only ours (+ program / bypass) without kIsHidden (JUCE patch);
 //   * mod wheel, pitch bend and sustain reach the engine through the VST3 path (IMidiMapping);
 //   * user presets of the pre-rename folder are migrated once.
-//   VintageChonkHostTest "<path>\Vintage Chonk.vst3" <out dir> [--no-screenshot]
+//   * 1.2.0: the Sidechain input bus (layout, arrangements, absent / silent / noise input), ORBIT INPUT in every
+//     dimension, the held / stopped orbit and puck automation, 1.1.0 states bit-identical against the released
+//     1.1.0 bundle (plugin/dist, loaded read-only), the WebView2 folder per host and the editor's fallback.
+//   VintageChonkHostTest "<path>\Atomic Lounge.vst3" <out dir> [--no-screenshot] [--ref "<1.1.0 .vst3>"]
+//   VintageChonkHostTest --editor-child "<.vst3>" <status file> <seconds>      (a second "host" for the editor test)
 #define NOMINMAX
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -25,8 +29,10 @@
 #include <cstdlib>
 #include <new>
 #include <set>
+#include <map>
 #include <pluginterfaces/base/ipluginbase.h>
 #include <pluginterfaces/vst/ivstcomponent.h>
+#include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstmessage.h>
 #include "EngineRunner.h"
@@ -114,6 +120,56 @@ static juce::AudioBuffer<float> renderPlugin (juce::AudioPluginInstance& p, doub
     }
     p.releaseResources();
     return out;
+}
+
+// a render with something on the sidechain: in (ch, sample) gives the input; inCh 0 = the input bus switched off
+static juce::AudioBuffer<float> renderIn (juce::AudioPluginInstance& p, double fs, int bs, double seconds, const std::vector<Ev>& evs,
+                                      std::function<float (int, int64_t)> in, int inCh)
+{
+    auto lay = p.getBusesLayout();
+    lay.inputBuses.getReference (0) = inCh == 0 ? juce::AudioChannelSet::disabled() : inCh == 1 ? juce::AudioChannelSet::mono() : juce::AudioChannelSet::stereo();
+    p.releaseResources();
+    p.setBusesLayout (lay);
+    p.setRateAndBufferSizeDetails (fs, bs);
+    p.prepareToPlay (fs, bs);
+    const int total = (int) std::lround (seconds * fs);
+    juce::AudioBuffer<float> out (2, total), buf (2, bs);
+    juce::MidiBuffer midi;
+    for (int pos = 0; pos < total; pos += bs)
+    {
+        const int n = std::min (bs, total - pos);
+        midi.clear();
+        for (const auto& e : evs)
+        {
+            const int64_t m = std::llround (e.t * fs);
+            if (m >= pos && m < pos + n) midi.addEvent (e.b, evSize (e), (int) (m - pos));
+        }
+        buf.setSize (2, n, false, false, true);
+        buf.clear();
+        if (in && inCh > 0)
+            for (int c = 0; c < inCh; c++)
+                for (int i = 0; i < n; i++) buf.setSample (c, i, in (c, pos + i));
+        p.processBlock (buf, midi);
+        for (int c = 0; c < 2; c++) out.copyFrom (c, pos, buf, c, 0, n);
+    }
+    p.releaseResources();
+    lay.inputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+    p.setBusesLayout (lay);
+    return out;
+}
+
+// a demo sidechain (own material, generated): a soft kick every half beat at 120 BPM, a noise tick between, a held
+// 110 Hz tone of a few harmonics; about -14 dBFS peak
+static float demoInput (int c, int64_t i)
+{
+    const double t = (double) i / 48000.0, beat = std::fmod (t, 0.5), half = std::fmod (t + 0.25, 0.5);
+    const double kick = 0.35 * std::exp (-beat * 18.0) * std::sin (2.0 * 3.14159265358979 * (55.0 + 60.0 * std::exp (-beat * 30.0)) * beat);
+    uint32_t x = (uint32_t) (i * 2654435761u) ^ (uint32_t) (c * 0x9e3779b9u);
+    x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+    const double tick = 0.12 * std::exp (-half * 60.0) * ((double) (x >> 8) / 8388608.0 - 1.0);
+    double tone = 0;
+    for (int h = 1; h <= 6; h++) tone += std::sin (2.0 * 3.14159265358979 * 110.0 * h * t + 0.3 * h) / h;
+    return (float) (kick + tick + 0.05 * tone);
 }
 
 struct Stats { double rms = 0, peak = 0; bool finite = true; };
@@ -360,7 +416,8 @@ static void orbitApply (orbit::Runner& r, const orbit::Settings& s)
     const auto& hp = orbit::hostParams();
     for (int i = 0; i < (int) hp.size(); i++) r.setHostNorm (i, orbit::hostNormFromSettings (hp[(size_t) i], s));
     for (int i = 0; i < orbit::numCore; i++) r.setCore (i, s.core[(size_t) i]);
-    r.setPath (s.path, s.sync, s.drawn);
+    r.setPath (s.path != orbit::pathHold ? s.path : s.shape, s.sync, s.drawn);
+    r.setExtras (s.legacyWobble, s.inWindow);
     r.setFx (s.fxOn, s.ensMode, s.revType, s.bbdSync, s.oilSync);
     r.setMods (s.mods);
     for (int l = 0; l < orbit::layers; l++) { r.requestSource (l, s.src[l]); r.requestImpulse (l, s.imp[l]); }
@@ -517,15 +574,57 @@ static juce::var orbitPanelState()
     return juce::var (o);
 }
 
+// a second "host" for the editor test (this program copied under another name): opens the plugin's editor and
+// waits until its status file says the panel loaded or fell back. Exit 0 loaded, 2 fallback, 1 neither.
+static int editorChild (const juce::String& path, const juce::File& status, int seconds)
+{
+    SetEnvironmentVariableW (L"ATOMIC_LOUNGE_TEST_STATUS", status.getFullPathName().toWideCharPointer());
+    juce::AudioPluginFormatManager fm;
+    juce::addDefaultFormatsToManager (fm);
+    juce::OwnedArray<juce::PluginDescription> types;
+    for (auto* f : fm.getFormats())
+        if (auto* v = dynamic_cast<juce::VST3PluginFormat*> (f)) v->findAllTypesForFile (types, path);
+    if (types.isEmpty()) return 1;
+    juce::String err;
+    auto p = fm.createPluginInstance (*types[0], 48000.0, 256, err);
+    if (p == nullptr) return 1;
+    std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditorIfNeeded());
+    if (ed == nullptr) return 1;
+    juce::DocumentWindow win ("Atomic Lounge (second host)", juce::Colours::black, 0, true);
+    win.setUsingNativeTitleBar (true);
+    win.setContentNonOwned (ed.get(), true);
+    win.setTopLeftPosition (120, 120);
+    win.setVisible (true);
+    pumpUntil ([&] { const auto t = status.loadFileAsString().removeCharacters ("\r"); return t.contains ("\nloaded") || t.contains ("\nfallback"); }, seconds * 1000);
+    pumpUntil ({}, 500);
+    const auto t = status.loadFileAsString().removeCharacters ("\r");
+    win.setVisible (false);
+    win.clearContentComponent();
+    ed.reset();
+    pumpUntil ({}, 300);
+    p.reset();
+    return t.contains ("\nloaded") ? 0 : t.contains ("\nfallback") ? 2 : 1;
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
+    if (argc > 4 && juce::String (argv[1]) == "--editor-child") return editorChild (juce::String (argv[2]), juce::File (juce::String (argv[3])), std::atoi (argv[4]));
     const juce::String path = argc > 1 ? juce::String (argv[1]) : juce::String (MFM1_VST3_PATH);
     const juce::File outDir (argc > 2 ? juce::String (argv[2]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     bool shots = true;
     for (int i = 1; i < argc; i++) if (juce::String (argv[i]) == "--no-screenshot") shots = false;
+    // the released 1.1.0 bundle (read only) for the bit-identity checks: --ref <bundle>, else plugin/dist next to the
+    // dev bundle's folder, else release/v1.1.0-bundle (where the 1.2.0 release moved it). With --ref the reference is
+    // required; without one anywhere (a fresh clone) the 1.1.0 states are checked on the saved fixtures alone.
+    const auto pluginDir = juce::File (path).getParentDirectory().getParentDirectory();
+    juce::String refPath = pluginDir.getChildFile ("dist").getChildFile ("Vintage Chonk.vst3").getFullPathName();
+    if (! juce::File (refPath).exists())
+        refPath = pluginDir.getParentDirectory().getChildFile ("release/v1.1.0-bundle/Vintage Chonk.vst3").getFullPathName();
+    bool refRequired = false;
+    for (int i = 1; i + 1 < argc; i++) if (juce::String (argv[i]) == "--ref") { refPath = juce::String (argv[i + 1]); refRequired = true; }
     outDir.createDirectory();
-    std::printf ("Vintage Chonk host test\n  plugin: %s\n", path.toRawUTF8());
+    std::printf ("Atomic Lounge host test\n  plugin: %s\n", path.toRawUTF8());
 
     // ---------------------------------------------------------------- 1. EngineRunner directly ---
     std::printf ("[engine runner]\n");
@@ -609,10 +708,10 @@ int main (int argc, char** argv)
     if (types.isEmpty()) return 1;
     const auto desc = *types[0];
     info (desc.name + " by " + desc.manufacturerName + ", " + desc.category + ", version " + desc.version + ", id " + desc.createIdentifierString());
-    check (desc.name == "Vintage Chonk" && desc.manufacturerName == "Coley", "name Vintage Chonk, company Coley");
-    check (desc.version == "1.1.0", "version 1.1.0 (" + desc.version + ")");
+    check (desc.name == "Atomic Lounge" && desc.manufacturerName == "Coley", "name Atomic Lounge, company Coley");
+    check (desc.version == "1.2.0", "version 1.2.0 (" + desc.version + ")");
     check (desc.isInstrument, "registered as an instrument");
-    check (desc.numInputChannels == 0 && desc.numOutputChannels == 2, "no audio in, stereo out (" + juce::String (desc.numInputChannels) + " in / " + juce::String (desc.numOutputChannels) + " out)");
+    check (desc.numInputChannels == 2 && desc.numOutputChannels == 2, "stereo sidechain in, stereo out (" + juce::String (desc.numInputChannels) + " in / " + juce::String (desc.numOutputChannels) + " out)");
 
     auto make = [&]
     {
@@ -636,7 +735,12 @@ int main (int argc, char** argv)
             on.add (plug->getProgramName (nChonk + i));
             if (plug->getProgramName (nChonk + i) == "ORBIT - " + orbit::factoryName (i)) named++;
         }
-        check (named == nOrbit && nOrbit == 8, "ORBIT programs after the CHONK ones: " + on.joinIntoString (", "));
+        check (named == nOrbit && nOrbit == 11, "ORBIT programs after the REGOLITH ones (17-24 as in 1.1.0, 25-27 new): " + on.joinIntoString (", "));
+        static const char* v110[8] = { "RUSTED SATELLITE", "BOWED HALO", "BREATHING TAPE CHOIR", "SPRING RAIN", "WOOD BOX MARIMBA",
+                                       "LIVE CROSS DRONE", "MOTION CHOP", "THREE-BODY ORBIT" };
+        int same = 0;
+        for (int i = 0; i < 8; i++) same += plug->getProgramName (nChonk + i) == juce::String ("ORBIT - ") + v110[i] ? 1 : 0;
+        check (same == 8 && plug->getProgramName (24).startsWith ("ORBIT - INPUT"), "programs 17-24 keep their 1.1.0 names and numbers; 25 = " + plug->getProgramName (24));
     }
     int named = 0;
     for (int i = 0; i < mfm1::numParams; i++)
@@ -968,7 +1072,8 @@ int main (int argc, char** argv)
             p->setCurrentProgram (mfm1_factory::count + i);
             auto x = pluginState (*p);
             auto* oe = x != nullptr ? x->getChildByName ("ORBIT") : nullptr;
-            const auto o = renderPlugin (*p, 48000.0, 256, 2.0, chordScore ({ { 48, 55, 60, 64 } }, 1.4, 0.0));
+            const auto o = i >= 8 && i <= 9 ? renderIn (*p, 48000.0, 256, 2.0, chordScore ({ { 48, 55, 60, 64 } }, 1.4, 0.0), demoInput, 2)
+                                            : renderPlugin (*p, 48000.0, 256, 2.0, chordScore ({ { 48, 55, 60, 64 } }, 1.4, 0.0));
             const auto so = stats (o);
             const bool ok = x != nullptr && x->getStringAttribute ("mode") == "orbit" && p->getCurrentProgram() == mfm1_factory::count + i
                             && x->getIntAttribute ("orbitProgram", -1) == i && oe != nullptr && oe->toString().contains (orbit::factoryName (i))
@@ -1372,7 +1477,8 @@ int main (int argc, char** argv)
             }
             sortScore (sc);
             const double secs = sc.back().t + 3.0;
-            const auto out = renderPlugin (*p, 48000.0, 256, secs, sc);
+            const auto out = i >= 8 && i <= 9 ? renderIn (*p, 48000.0, 256, secs, sc, demoInput, 2)   // INPUT presets: the demo sidechain
+                                              : renderPlugin (*p, 48000.0, 256, secs, sc);
             p->setPlayHead (nullptr);
             const auto st = stats (out);
             if (st.finite && st.rms > 0.002 && st.peak <= 0.8913) ok++;      // every preset peaks at or below -1 dBFS
@@ -1397,10 +1503,384 @@ int main (int argc, char** argv)
         check (cpu < 0.6, "ORBIT CPU through the VST3 (THREE-BODY ORBIT, 5-note chords, 48 kHz / 256): " + juce::String (cpu * 100.0, 1) + " % of one core");
     }
 
+    // ------------------------------------------------------------------- 7. 1.2.0: live input ---
+    std::printf ("[1.2.0: the Sidechain input bus]\n");
+    {
+        using namespace Steinberg;
+        auto p = make();
+        auto* b = p->getBusCount (true) == 1 ? p->getBus (true, 0) : nullptr;
+        check (b != nullptr && b->getName() == "Sidechain", "one audio input bus, \"Sidechain\" (" + juce::String (p->getBusCount (true)) + " input buses)");
+        if (b != nullptr)
+            check (b->getDefaultLayout() == juce::AudioChannelSet::stereo() && b->isEnabledByDefault() && b->isEnabled(),
+                   "sidechain: stereo, active by default");
+        Vst::IComponent* comp = p->getVST3Client() != nullptr ? p->getVST3Client()->getIComponentPtr() : nullptr;
+        if (comp != nullptr)
+        {
+            Vst::BusInfo bi {};
+            const bool got = comp->getBusCount (Vst::kAudio, Vst::kInput) == 1 && comp->getBusInfo (Vst::kAudio, Vst::kInput, 0, bi) == kResultOk;
+            const juce::String nm (juce::CharPointer_UTF16 (reinterpret_cast<const juce::CharPointer_UTF16::CharType*> (bi.name)));
+            check (got && bi.busType == Vst::kAux && bi.channelCount == 2 && (bi.flags & Vst::BusInfo::kDefaultActive) != 0 && nm == "Sidechain",
+                   "VST3 input bus 0: type " + juce::String (bi.busType == Vst::kAux ? "kAux" : "kMain") + ", " + juce::String (bi.channelCount)
+                       + " channels, " + ((bi.flags & Vst::BusInfo::kDefaultActive) ? "kDefaultActive" : "not default-active") + ", \"" + nm + "\"");
+            Vst::BusInfo bo {};
+            check (comp->getBusCount (Vst::kAudio, Vst::kOutput) == 1 && comp->getBusInfo (Vst::kAudio, Vst::kOutput, 0, bo) == kResultOk
+                       && bo.busType == Vst::kMain && bo.channelCount == 2, "VST3 output bus 0: main, stereo");
+            Vst::IAudioProcessor* ap = nullptr;
+            comp->queryInterface (Vst::IAudioProcessor::iid, reinterpret_cast<void**> (&ap));
+            if (ap != nullptr)
+            {
+                // what Measures asks (inactive component): stereo, then mono; a DAW may also switch the input off
+                p->releaseResources();
+                comp->setActive (false);
+                Vst::SpeakerArrangement st = Vst::SpeakerArr::kStereo, mo = Vst::SpeakerArr::kMono, none = 0, s51 = Vst::SpeakerArr::k51;
+                const auto rs = ap->setBusArrangements (&st, 1, &st, 1);
+                const auto rm = ap->setBusArrangements (&mo, 1, &st, 1);
+                Vst::SpeakerArrangement got1 = 0;
+                ap->getBusArrangement (Vst::kInput, 0, got1);
+                const auto rn = ap->setBusArrangements (&none, 1, &st, 1);
+                const auto r51 = ap->setBusArrangements (&s51, 1, &st, 1);
+                const auto rmo = ap->setBusArrangements (&st, 1, &mo, 1);
+                ap->setBusArrangements (&st, 1, &st, 1);
+                check (rs == kResultTrue && rm == kResultTrue && got1 == Vst::SpeakerArr::kMono && rn == kResultTrue && r51 != kResultTrue && rmo == kResultTrue,
+                       "setBusArrangements: stereo in " + juce::String (rs == kResultTrue ? "ok" : "refused") + ", mono in " + (rm == kResultTrue ? "ok" : "refused")
+                           + ", no channels " + (rn == kResultTrue ? "ok" : "refused") + ", 5.1 in " + (r51 == kResultTrue ? "accepted (wrong)" : "refused")
+                           + ", mono out " + (rmo == kResultTrue ? "ok" : "refused"));
+                const auto ra = comp->activateBus (Vst::kAudio, Vst::kInput, 0, true);
+                check (ra == kResultTrue, "activateBus (audio input 0) accepted");
+                ap->release();
+            }
+        }
+        // JUCE's own layout checks (what JUCE-based hosts ask)
+        auto lay = p->getBusesLayout();
+        lay.inputBuses.getReference (0) = juce::AudioChannelSet::mono();
+        const bool monoOk = p->checkBusesLayoutSupported (lay);
+        lay.inputBuses.getReference (0) = juce::AudioChannelSet::disabled();
+        const bool offOk = p->checkBusesLayoutSupported (lay);
+        lay.inputBuses.getReference (0) = juce::AudioChannelSet::create5point1();
+        const bool s51Ok = p->checkBusesLayoutSupported (lay);
+        check (monoOk && offOk && ! s51Ok, "layouts: mono and disabled sidechain accepted, 5.1 refused");
+    }
+
+    auto sine220 = [] (int, int64_t i) { return 0.5f * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * (double) i / 48000.0); };
+    auto noiseIn = [] (int c, int64_t i) { uint32_t x = (uint32_t) (i * 2654435761u) ^ (uint32_t) (c * 0x9e3779b9u); x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+                                           return (float) (x >> 8) / 8388608.0f - 1.0f; };   // full scale
+    auto relDiff = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from)
+    {
+        double d = 0, s = 0;
+        for (int c = 0; c < 2; c++)
+            for (int i = from; i < a.getNumSamples(); i++)
+            {
+                const double x = a.getSample (c, i), y = b.getSample (c, i);
+                d += (x - y) * (x - y);
+                s += std::max (x * x, y * y);
+            }
+        return std::sqrt (d / std::max (s, 1e-30));
+    };
+    const std::vector<Ev> oneNote = { { 0.1, { 0x90, 57, 100 } }, { 2.6, { 0x80, 57, 0 } } };
+
+    std::printf ("[1.2.0: ORBIT live input through the VST3]\n");
+    {
+        auto p = make();
+        const int prog25 = mfm1_factory::count + 8, prog26 = prog25 + 1;
+        // absent / disabled, silent, full-scale noise: every INPUT preset stays finite and quiet when nothing arrives
+        for (int pr : { prog25, prog26 })
+        {
+            const auto nm = p->getProgramName (pr);
+            auto fresh = [&] { auto q = make(); q->setCurrentProgram (pr); return q; };   // the random walks run on across renders of one instance
+            const auto off = renderIn (*fresh(), 48000.0, 256, 3.0, oneNote, {}, 0);
+            const auto sil = renderIn (*fresh(), 48000.0, 256, 3.0, oneNote, [] (int, int64_t) { return 0.0f; }, 2);
+            const auto nz = renderIn (*fresh(), 48000.0, 256, 3.0, oneNote, noiseIn, 2);
+            const auto mono = renderIn (*fresh(), 48000.0, 256, 3.0, oneNote, sine220, 1);
+            const auto so = stats (off), ss = stats (sil), sn = stats (nz), sm = stats (mono);
+            check (so.finite && ss.finite && sn.finite && sm.finite && sn.peak < 1.5, nm + ": input off / silent / full-scale noise / mono sine: finite, noise peak "
+                       + juce::String (db (sn.peak), 1) + " dBFS (rms off " + juce::String (db (so.rms), 1) + ", silent " + juce::String (db (ss.rms), 1)
+                       + ", noise " + juce::String (db (sn.rms), 1) + ", mono sine " + juce::String (db (sm.rms), 1) + " dBFS)");
+            check (maxDiff (off, sil) < 1e-6, nm + ": a switched-off input sounds the same as a silent one (max diff " + juce::String (maxDiff (off, sil), 9) + ")");
+            check (sm.rms > 2.0 * ss.rms + 1e-5, nm + ": a mono sidechain is used ((L+R)/2 path)");
+            // no stuck tail: 3 s of noise, then 6 s of silence
+            auto burst = [&] (int c, int64_t i) { return i < 3 * 48000 ? noiseIn (c, i) : 0.0f; };
+            const auto t = renderIn (*fresh(), 48000.0, 256, 12.0, {}, burst, 2);
+            const double tail = stats (t, 11 * 48000, 12 * 48000).rms;
+            check (stats (t).finite && tail < 1e-4, nm + ": after the input stops there is no stuck tail (last second " + juce::String (db (tail), 1) + " dBFS)");
+        }
+        // HALO FOLLOWER: layer 1 = INPUT through a halo, THRU: sound with the sine alone, no note
+        {
+            p->setCurrentProgram (prog26);
+            const auto a = renderIn (*p, 48000.0, 256, 2.0, {}, sine220, 2);
+            const auto z = renderIn (*p, 48000.0, 256, 2.0, {}, [] (int, int64_t) { return 0.0f; }, 2);
+            check (stats (a, 48000).rms > 0.003 && stats (z).rms < 1e-6, "INPUT source (THRU) plays the sidechain without notes (rms " + juce::String (db (stats (a, 48000).rms), 1)
+                       + " dBFS; silent input " + juce::String (db (stats (z).rms), 1) + " dBFS)");
+        }
+        // every dimension with INPUT: a REGOLITH pad (layer 1) with the INPUT as its impulse, one dimension at a time;
+        // the sidechain (sine / noise / silent) must change the output measurably
+        static const int dims[5] = { MFO_L_BODY, MFO_L_TONE, MFO_L_GRAIN, MFO_L_MOTION, MFO_L_PITCH };
+        static const char* dn[5] = { "BODY", "TONE", "GRAIN", "MOTION", "PITCH" };
+        for (int d = 0; d < 5; d++)
+        {
+            orbit::Settings s = orbit::factoryPreset (10);       // PARKED - TWIN FIELD: a plain held start
+            for (int l = 0; l < orbit::layers; l++) { s.src[l].kind = orbit::Src::off; s.imp[l].kind = orbit::Imp::off; }
+            s.src[0].kind = orbit::Src::synth;
+            s.src[0].patch.name = "Velvet Pad";
+            s.impInput[0] = true;
+            for (int k = 0; k < 5; k++) s.core[(size_t) MFO_LPARAM (0, dims[k])] = k == d ? 1.0f : 0.0f;
+            s.core[MFO_P_PUCK_X] = -0.7f; s.core[MFO_P_PUCK_Y] = 0.7f;
+            s.mods = {};
+            for (auto& f : s.fxOn) f = false;
+            s.core[MFO_P_MASTER] = 0.8f;
+            const auto blobD = orbitBlob (*p, &s, "orbit");
+            p->setStateInformation (blobD.getData(), (int) blobD.getSize());
+            const auto a = renderIn (*p, 48000.0, 256, 3.0, oneNote, sine220, 2);
+            const auto bnz = renderIn (*p, 48000.0, 256, 3.0, oneNote, [&] (int c, int64_t i) { return 0.25f * noiseIn (c, i); }, 2);
+            const auto z = renderIn (*p, 48000.0, 256, 3.0, oneNote, [] (int, int64_t) { return 0.0f; }, 2);
+            const double dsn = relDiff (a, bnz, 48000), dsz = relDiff (a, z, 48000);
+            check (stats (a).finite && dsn > 0.1 && dsz > 0.1, juce::String (dn[d]) + " with INPUT: sine vs noise on the sidechain differ by " + juce::String (100.0 * dsn, 1)
+                       + " %, sine vs silence by " + juce::String (100.0 * dsz, 1) + " % (rms sine " + juce::String (db (stats (a, 48000).rms), 1)
+                       + ", noise " + juce::String (db (stats (bnz, 48000).rms), 1) + ", silent " + juce::String (db (stats (z, 48000).rms), 1) + " dBFS)");
+        }
+        // latency: INPUT as a source, everything else off: a click comes out exactly the reported latency later
+        {
+            orbit::Settings s = orbit::factoryPreset (10);
+            for (int l = 0; l < orbit::layers; l++) { s.src[l].kind = orbit::Src::off; s.imp[l].kind = orbit::Imp::off; s.core[(size_t) MFO_LPARAM (l, MFO_L_BODY)] = 0.0f; }
+            s.srcInput[0] = true;
+            s.core[MFO_P_PUCK_X] = -0.7f; s.core[MFO_P_PUCK_Y] = 0.7f;
+            s.core[MFO_P_DRIFT] = 0.0f; s.core[MFO_P_DRIVE] = 0.0f; s.core[MFO_P_MASTER] = 1.0f;
+            s.mods = {};
+            for (auto& f : s.fxOn) f = false;
+            const auto blob = orbitBlob (*p, &s, "orbit");
+            p->setStateInformation (blob.getData(), (int) blob.getSize());
+            const int at = 24000;
+            const auto o = renderIn (*p, 48000.0, 256, 1.0, {}, [&] (int, int64_t i) { return i == at ? 0.3f : 0.0f; }, 2);
+            int arg = -1; float best = 0;
+            for (int i = 0; i < o.getNumSamples(); i++) if (std::fabs (o.getSample (0, i)) > best) { best = std::fabs (o.getSample (0, i)); arg = i; }
+            const int lat = p->getLatencySamples();
+            check (arg - at == lat && lat == 347, "INPUT source latency: a click on the sidechain comes out " + juce::String (arg - at) + " samples later = the reported "
+                       + juce::String (lat) + " samples (" + juce::String (lat / 48.0, 2) + " ms at 48 kHz, compensated by the host)");
+        }
+    }
+
+    std::printf ("[1.2.0: held orbit, stopped orbit, puck automation (engine host)]\n");
+    {
+        auto runner = [] (const orbit::Settings& s)
+        {
+            auto r = std::make_unique<orbit::Runner>();
+            r->prepare (48000.0, 256);
+            orbitApply (*r, s);
+            r->createEngine();
+            r->waitIdle (20000);
+            return r;
+        };
+        const auto& hp = orbit::hostParams();
+        const int hX = orbit::hostIndexForCore (MFO_P_PUCK_X), hY = orbit::hostIndexForCore (MFO_P_PUCK_Y);
+        const int hMotion = orbit::hostIndexForSpecial (orbit::spMotion), hRate = orbit::hostIndexForSpecial (orbit::spRate);
+        std::vector<float> l (256), rr (256);
+        {
+            orbit::Settings s = orbit::factoryPreset (10);
+            s.core[MFO_P_ORBIT_WOBBLE] = 0.8f;      // wobble turned up: it must not move a held puck (puck drift 0)
+            s.mods = {};
+            auto r = runner (s);
+            for (int k = 0; k < 40; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto m0 = r->meter();
+            bool same = true;
+            for (int k = 0; k < 400; k++)
+            {
+                r->process (l.data(), rr.data(), 256, nullptr, 0);
+                const auto m = r->meter();
+                same = same && m.puckX == m0.puckX && m.puckY == m0.puckY && std::memcmp (m.w, m0.w, sizeof m.w) == 0;
+            }
+            check (same, "held puck with WOBBLE 0.8 and PUCK DRIFT 0: position and blend weights bit-identical over 2 s ("
+                             + juce::String (m0.w[0], 3) + " / " + juce::String (m0.w[1], 3) + " / " + juce::String (m0.w[2], 3) + " / " + juce::String (m0.w[3], 3) + ")");
+            // automation: Puck X/Y to node 1, then node 3 -> the blend weights follow
+            r->setHostNorm (hX, orbit::normFromCore (hp[(size_t) hX], -0.7f));
+            r->setHostNorm (hY, orbit::normFromCore (hp[(size_t) hY], 0.6f));
+            for (int k = 0; k < 60; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto m1 = r->meter();
+            r->setHostNorm (hX, orbit::normFromCore (hp[(size_t) hX], 0.7f));
+            r->process (l.data(), rr.data(), 64, nullptr, 0);
+            const auto mStep = r->meter();
+            r->setHostNorm (hY, orbit::normFromCore (hp[(size_t) hY], 0.6f));
+            for (int k = 0; k < 60; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto m2 = r->meter();
+            check (m1.w[0] > 0.98f && m2.w[1] > 0.98f && mStep.puckX < 0.0f,
+                   "ORBIT Puck X/Y automation while held: node 1 -> L1 weight " + juce::String (m1.w[0], 4) + ", node 2 -> L2 weight " + juce::String (m2.w[1], 4)
+                       + "; smoothed (x " + juce::String (mStep.puckX, 3) + " 64 samples after a jump to 0.7)");
+        }
+        {
+            // ORBIT Motion on, CIRCLE, RATE at its minimum: stopped (no creep); back up: it moves
+            orbit::Settings s = orbit::factoryPreset (10);
+            s.path = orbit::pathCircle; s.shape = orbit::pathCircle; s.sync = false; s.rate = 0.0f;
+            s.core[MFO_P_ORBIT_WOBBLE] = 0.0f;
+            s.mods = {};
+            auto r = runner (s);
+            for (int k = 0; k < 20; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto a = r->meter();
+            for (int k = 0; k < 600; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto b2 = r->meter();
+            r->setHostNorm (hRate, 0.5f);
+            for (int k = 0; k < 200; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto c = r->meter();
+            r->setHostNorm (hMotion, 0.0f);
+            r->setHostNorm (hRate, 0.5f);
+            for (int k = 0; k < 20; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto d0 = r->meter();
+            for (int k = 0; k < 200; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto d1 = r->meter();
+            check (a.puckX == b2.puckX && a.puckY == b2.puckY && (c.puckX != b2.puckX || c.puckY != b2.puckY) && d0.puckX == d1.puckX && d0.puckY == d1.puckY,
+                   "RATE 0 = stopped (no creep over 3.2 s); RATE up moves it; ORBIT Motion off holds it (host-automatable)");
+        }
+        {
+            // a 1.1.0 state keeps its behaviour: wobble still moves a held puck there
+            orbit::Settings s = orbit::factoryPreset (3);        // SPRING RAIN: held, wobble 0.35 (1.1.0)
+            auto r = runner (s);
+            for (int k = 0; k < 20; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto a = r->meter();
+            for (int k = 0; k < 400; k++) r->process (l.data(), rr.data(), 256, nullptr, 0);
+            const auto b2 = r->meter();
+            check (s.legacyWobble && (a.puckX != b2.puckX || a.puckY != b2.puckY), "1.1.0 presets keep their wobble on a held puck (SPRING RAIN, legacy)");
+        }
+        {
+            int held = 0, moving = 0, sweep = 0;
+            for (int i = 0; i < orbit::factoryCount(); i++)
+            {
+                const auto s = orbit::factoryPreset (i);
+                if (s.path == orbit::pathHold) held++; else moving++;
+                bool mx = false;
+                for (const auto& m : s.mods) mx = mx || ((m.dst == MFO_P_PUCK_X || m.dst == MFO_P_PUCK_Y) && m.src >= MFO_MS_MACRO1 && m.src <= MFO_MS_MACRO4 && m.amount != 0.0f);
+                if (s.path == orbit::pathHold && mx) sweep++;
+            }
+            check (held >= 3 && moving >= 2 && sweep >= 3 && orbit::Settings().path == orbit::pathHold,
+                   juce::String (held) + " factory presets hold the puck (" + juce::String (sweep) + " with a macro on puck X/Y), " + juce::String (moving)
+                       + " move; a new patch starts held");
+        }
+    }
+
+    std::printf ("[1.2.0: engine host with input: allocation, CPU]\n");
+    {
+        for (int pi : { 8, 9 })
+        {
+            orbit::Runner r;
+            r.prepare (48000.0, 256);
+            orbitApply (r, orbit::factoryPreset (pi));
+            r.createEngine();
+            r.waitIdle (20000);
+            std::vector<float> l (2048), rr (2048), il (2048), ir (2048);
+            for (size_t i = 0; i < il.size(); i++) { il[i] = noiseIn (0, (int64_t) i); ir[i] = noiseIn (1, (int64_t) i); }
+            mfm1::MidiEvent mev[2] = { { 10, { 0x90, 48, 100 }, 3 }, { 77, { 0x90, 55, 100 }, 3 } };
+            r.process (l.data(), rr.data(), il.data(), ir.data(), 64, nullptr, 0);
+            allocs = 0;
+            countAllocs = true;
+            bool fin = true;
+            for (int k = 0; k < 600; k++)
+            {
+                const int n = (k % 5) * 97 + 31;
+                r.process (l.data(), rr.data(), il.data(), k % 7 == 3 ? nullptr : ir.data(), n, k == 3 ? mev : nullptr, k == 3 ? 2 : 0);
+                for (int i = 0; i < n; i++) fin = fin && std::isfinite (l[(size_t) i]) && std::isfinite (rr[(size_t) i]);
+            }
+            countAllocs = false;
+            check (allocs.load() == 0 && fin, orbit::factoryName (pi) + ": no heap allocation on the audio thread with the input over 600 blocks ("
+                                                  + juce::String ((int) allocs.load()) + "), all finite");
+            // CPU at 48 kHz / 256, five-note chords, noise on the sidechain
+            r.reset();
+            const int total = 48000 * 8;
+            std::vector<mfm1::MidiEvent> ev;
+            double best = 1e9;
+            for (int run = 0; run < 3; run++)
+            {
+                const auto t0 = std::chrono::steady_clock::now();
+                for (int pos = 0; pos < total; pos += 256)
+                {
+                    ev.clear();
+                    if (pos % 96000 == 0) for (int nn : { 48, 55, 60, 64, 67 }) ev.push_back ({ 0, { 0x90, (uint8_t) nn, 100 }, 3 });
+                    if (pos % 96000 == 84992) for (int nn : { 48, 55, 60, 64, 67 }) ev.push_back ({ 0, { 0x80, (uint8_t) nn, 0 }, 3 });
+                    r.process (l.data(), rr.data(), il.data() + (pos % 1024), ir.data() + (pos % 1024), 256, ev.data(), (int) ev.size());
+                }
+                best = std::min (best, std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() / 8.0);
+            }
+            check (best < 0.6, "ORBIT CPU at 48 kHz / 256 with the input, " + orbit::factoryName (pi) + ": " + juce::String (best * 100.0, 1) + " % of one core");
+        }
+    }
+
+    std::printf ("[1.2.0: 1.1.0 states load and render bit-identically]\n");
+    {
+        juce::File ref (refPath);
+        const auto repoDir = juce::File (path).getParentDirectory().getParentDirectory().getParentDirectory();
+        const auto fxDir = repoDir.getChildFile ("plugin/tests/fixtures");
+        juce::OwnedArray<juce::PluginDescription> rt;
+        if (ref.exists()) vst3->findAllTypesForFile (rt, ref.getFullPathName());
+        const bool haveRef = rt.size() == 1 && rt[0]->version == "1.1.0";
+        info ("reference: " + ref.getFullPathName() + (haveRef ? " (1.1.0)" : " (not found: fixtures only)"));
+        auto makeRef = [&]
+        {
+            juce::String err;
+            auto q = fm.createPluginInstance (*rt[0], 48000.0, 256, err);
+            return q;
+        };
+        // fixtures: one REGOLITH (CHONK) and three ORBIT programs saved by 1.1.0 (written from the reference once)
+        const int progs[4] = { 2, mfm1_factory::count + 0, mfm1_factory::count + 3, mfm1_factory::count + 6 };
+        int ok = 0, have = 0;
+        juce::StringArray notes;
+        for (int pr : progs)
+        {
+            const auto fx = fxDir.getChildFile ("state_1.1.0_program" + juce::String (pr + 1) + ".bin");
+            if (haveRef && ! fx.existsAsFile())
+            {
+                auto q = makeRef();
+                q->setCurrentProgram (pr);
+                juce::MemoryBlock mb;
+                q->getStateInformation (mb);
+                fx.replaceWithData (mb.getData(), mb.getSize());
+            }
+            juce::MemoryBlock st;
+            if (! fx.loadFileAsData (st)) continue;
+            have++;
+            auto fresh = make();
+            fresh->setStateInformation (st.getData(), (int) st.getSize());
+            const auto out = renderPlugin (*fresh, 48000.0, 256, 6.0, threeChords);
+            bool same = stats (out).finite && stats (out).rms > 0.001;
+            juce::String note = juce::String (pr + 1) + ": rms " + juce::String (db (stats (out).rms), 1);
+            if (haveRef)
+            {
+                auto q = makeRef();
+                q->setStateInformation (st.getData(), (int) st.getSize());
+                const auto want = renderPlugin (*q, 48000.0, 256, 6.0, threeChords);
+                const double d = maxDiff (out, want);
+                same = same && d == 0.0 && fresh->getLatencySamples() == q->getLatencySamples();
+                note += ", max diff vs 1.1.0 " + juce::String (d, 12);
+            }
+            if (same) ok++;
+            notes.add (note);
+        }
+        check (have == 4 && ok == 4 && (haveRef || ! refRequired), juce::String (ok) + " of " + juce::String (have) + " 1.1.0 states (programs 3, 17, 20, 23) load and render "
+                   + (haveRef ? "bit-identically to the 1.1.0 release" : "(fixtures only: no 1.1.0 bundle to compare with; give one with --ref)") + ": " + notes.joinIntoString ("; "));
+        // the 1.1.0 parameter set: every 1.1.0 id is still there with its name
+        if (haveRef)
+        {
+            auto q = makeRef();
+            auto fresh = make();
+            std::map<juce::String, juce::String> now;
+            for (auto* prm : fresh->getParameters())
+                if (auto* hp = dynamic_cast<juce::HostedAudioProcessorParameter*> (prm)) now[hp->getParameterID()] = prm->getName (64);
+            int same = 0, total = 0;
+            for (auto* prm : q->getParameters())
+                if (auto* hp = dynamic_cast<juce::HostedAudioProcessorParameter*> (prm))
+                {
+                    total++;
+                    const auto it = now.find (hp->getParameterID());
+                    if (it != now.end() && it->second == prm->getName (64)) same++;
+                }
+            check (total > 0 && same == total, juce::String (same) + " of " + juce::String (total) + " 1.1.0 host parameters keep their id and name");
+            bool names = true;
+            for (int i = 0; i < q->getNumPrograms(); i++) names = names && q->getProgramName (i) == fresh->getProgramName (i);
+            check (names && q->getNumPrograms() == 24, "programs 1-24 named as in 1.1.0");
+        }
+    }
+
     // ------------------------------------------------------------------------------ 5. editor ---
     if (shots)
     {
         std::printf ("[editor: WebView2 panel]\n");
+        const auto statusA = outDir.getChildFile ("webview2_status_host.txt");
+        statusA.deleteFile();
+        SetEnvironmentVariableW (L"ATOMIC_LOUNGE_TEST_STATUS", statusA.getFullPathName().toWideCharPointer());
         auto p = make();
         std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditorIfNeeded());
         check (ed != nullptr, "editor created");
@@ -1408,7 +1888,7 @@ int main (int argc, char** argv)
         {
             info ("editor size " + juce::String (ed->getWidth()) + " x " + juce::String (ed->getHeight()) + (ed->isResizable() ? ", resizable" : ", fixed size"));
             check (ed->getWidth() == 1440 && ed->getHeight() == 900, "default size 1440 x 900");
-            juce::DocumentWindow win ("Vintage Chonk (host test)", juce::Colours::black, 0, true);
+            juce::DocumentWindow win ("Atomic Lounge (host test)", juce::Colours::black, 0, true);
             win.setUsingNativeTitleBar (true);
             win.setContentNonOwned (ed.get(), true);
             win.setTopLeftPosition (40, 40);
@@ -1418,6 +1898,63 @@ int main (int argc, char** argv)
             // the plugin's own initial record has spaces: the change proves page load + JS -> native
             const bool up = pumpUntil ([&] { return stateUi (*p).contains ("\"kind\":\"F\""); }, 25000);
             check (up, "panel loaded and reported its state to the plugin (" + juce::String ((int) (juce::Time::getMillisecondCounter() - t0)) + " ms): " + stateUi (*p));
+            // ---- 1.2.0: WebView2 per host program; two editors in one host; a second host at the same time; the fallback
+            {
+                const auto st = statusA.loadFileAsString().removeCharacters ("\r");
+                const auto want = juce::File::getSpecialLocation (juce::File::windowsLocalAppData).getChildFile ("Atomic Lounge").getChildFile ("WebView2")
+                                      .getChildFile (juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFileNameWithoutExtension());
+                check (st.contains ("folder " + want.getFullPathName() + "\n") && st.contains ("\nloaded"),
+                       "WebView2 data folder per host program: " + want.getFullPathName() + " (status: " + st.replace ("\n", " | ").trim() + ")");
+                // a second editor (another instance) in the same host, both open
+                auto p2 = make();
+                std::unique_ptr<juce::AudioProcessorEditor> ed2 (p2->createEditorIfNeeded());
+                juce::DocumentWindow win2 ("Atomic Lounge (host test, editor 2)", juce::Colours::black, 0, true);
+                win2.setUsingNativeTitleBar (true);
+                win2.setContentNonOwned (ed2.get(), true);
+                win2.setTopLeftPosition (90, 90);
+                win2.setVisible (true);
+                auto loadedCount = [&] { int k = 0; for (const auto& ln : juce::StringArray::fromLines (statusA.loadFileAsString())) k += ln.startsWith ("loaded") ? 1 : 0; return k; };
+                const bool two = pumpUntil ([&] { return loadedCount() >= 2 && stateUi (*p2).contains ("\"kind\":\"F\""); }, 25000);
+                check (two && stateUi (*p2).contains ("\"kind\":\"F\""), "two editors open at once in one host: both panels load (one WebView2 folder, one browser process)");
+                // a second host program while both editors stay open
+                auto launch = [&] (const juce::String& exeName, const juce::File& status, int& code)
+                {
+                    const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+                    const auto copy = outDir.getChildFile (exeName + ".exe");
+                    copy.deleteFile();
+                    self.copyFileTo (copy);
+                    status.deleteFile();
+                    juce::ChildProcess cp;
+                    code = -1;
+                    if (! cp.start (juce::StringArray { copy.getFullPathName(), "--editor-child", path, status.getFullPathName(), "40" }, 0)) return;
+                    const auto t0 = juce::Time::getMillisecondCounter();
+                    while (cp.isRunning() && juce::Time::getMillisecondCounter() - t0 < 60000) juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                    if (cp.isRunning()) cp.kill();
+                    code = (int) cp.getExitCode();
+                };
+                const auto statusB = outDir.getChildFile ("webview2_status_hostB.txt");
+                int codeB = -1;
+                launch ("AtomicLoungeHostB", statusB, codeB);
+                const auto sb = statusB.loadFileAsString().removeCharacters ("\r");
+                check (codeB == 0 && sb.contains ("WebView2\\AtomicLoungeHostB\n") && sb.contains ("\nloaded"),
+                       "a second host program opens its own panel while this host has two open (exit " + juce::String (codeB) + "; " + sb.replace ("\n", " | ").trim() + ")");
+                // the fallback: a host where WebView2 cannot start (runtime folder forced to a missing one)
+                const auto statusC = outDir.getChildFile ("webview2_status_hostC.txt");
+                SetEnvironmentVariableW (L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", outDir.getChildFile ("no-such-webview2-runtime").getFullPathName().toWideCharPointer());
+                int codeC = -1;
+                launch ("AtomicLoungeHostC", statusC, codeC);
+                SetEnvironmentVariableW (L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", nullptr);
+                const auto sc = statusC.loadFileAsString().removeCharacters ("\r");
+                check (codeC == 2 && sc.contains ("\nfallback") && sc.contains ("hr=0x8"),
+                       "WebView2 cannot start: the editor shows the reason, the HRESULT and Retry instead of a blank window (exit " + juce::String (codeC) + "; "
+                           + sc.replace ("\n", " | ").trim() + ")");
+                for (const char* n : { "AtomicLoungeHostB.exe", "AtomicLoungeHostC.exe" }) outDir.getChildFile (n).deleteFile();
+                win2.setVisible (false);
+                win2.clearContentComponent();
+                ed2.reset();
+                pumpUntil ({}, 300);
+                p2->releaseResources();
+            }
             p->setCurrentProgram (3);
             const bool moved = pumpUntil ([&] { return stateUi (*p).contains ("\"name\":\"Velvet Pad\""); }, 6000);
             check (moved, "host program change reached the panel and came back: " + stateUi (*p));
@@ -1464,7 +2001,7 @@ int main (int argc, char** argv)
         check (ed != nullptr, "ORBIT editor created");
         if (ed != nullptr)
         {
-            juce::DocumentWindow win ("Vintage Chonk ORBIT (host test)", juce::Colours::black, 0, true);
+            juce::DocumentWindow win ("Atomic Lounge ORBIT (host test)", juce::Colours::black, 0, true);
             win.setUsingNativeTitleBar (true);
             win.setContentNonOwned (ed.get(), true);
             win.setTopLeftPosition (40, 40);

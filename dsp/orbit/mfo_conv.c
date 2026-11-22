@@ -63,6 +63,92 @@ mfo_kernel_t *mfo_kernel_create(const float *const *ir, int channels, int len, f
     return k;
 }
 
+/* ---- kernels rebuilt in place on the audio thread (live INPUT impulse, 1.2.0) ---------------------- */
+mfo_kernel_t *mfo_kernel_alloc(int channels, int max_len)
+{
+    if (channels < 1 || channels > 2 || max_len < 1) return NULL;
+    mfo_kernel_t *k = calloc(1, sizeof *k);
+    if (!k) return NULL;
+    k->channels = channels; k->length = 0;
+    for (int l = 0; l < CV_NLEV; l++) {
+        int P = lev_parts(l, max_len), N = lev_n[l];
+        k->parts[l] = 0;
+        if (!P) continue;
+        for (int c = 0; c < channels; c++) {
+            k->re[l][c] = calloc((size_t)P * (N + 1), sizeof(float));
+            k->im[l][c] = calloc((size_t)P * (N + 1), sizeof(float));
+            if (!k->re[l][c] || !k->im[l][c]) { mfo_kernel_destroy(k); return NULL; }
+        }
+    }
+    return k;
+}
+
+struct mfo_kload {
+    int max_len;
+    mfo_fft_t *fft[CV_NLEV];
+    float *buf;                      /* 2 * 4096 */
+    mfo_kernel_t *k;
+    const float *ir;
+    int len, level, part, done;
+    float gain;
+};
+
+mfo_kload_t *mfo_kload_create(int max_len)
+{
+    mfo_kload_t *L = calloc(1, sizeof *L);
+    if (!L) return NULL;
+    L->max_len = max_len;
+    L->done = 1;
+    int ok = 1;
+    for (int l = 0; l < CV_NLEV; l++)
+        if (lev_parts(l, max_len)) { L->fft[l] = mfo_fft_create(2 * lev_n[l]); ok = ok && L->fft[l]; }
+    L->buf = calloc(2 * (size_t)lev_n[CV_NLEV - 1], sizeof(float));
+    if (!ok || !L->buf) { mfo_kload_destroy(L); return NULL; }
+    return L;
+}
+
+void mfo_kload_destroy(mfo_kload_t *L)
+{
+    if (!L) return;
+    for (int l = 0; l < CV_NLEV; l++) mfo_fft_destroy(L->fft[l]);
+    free(L->buf);
+    free(L);
+}
+
+void mfo_kload_begin(mfo_kload_t *L, mfo_kernel_t *k, const float *ir, int len, float gain)
+{
+    if (len > L->max_len) len = L->max_len;
+    if (len < 1) len = 1;
+    L->k = k; L->ir = ir; L->len = len; L->gain = gain;
+    L->level = 0; L->part = 0; L->done = 0;
+    memset(k->headr, 0, sizeof k->headr);
+    for (int m = 0; m < CV_B && m < len; m++) k->headr[0][CV_B - 1 - m] = ir[m] * gain;
+    k->channels = 1;
+    k->length = len;
+    for (int l = 0; l < CV_NLEV; l++) k->parts[l] = 0;   /* filled level by level; not usable until done */
+}
+
+int mfo_kload_step(mfo_kload_t *L, int max_parts)
+{
+    if (L->done) return 1;
+    mfo_kernel_t *k = L->k;
+    while (max_parts > 0 && L->level < CV_NLEV) {
+        int l = L->level, P = lev_parts(l, L->len), N = lev_n[l];
+        if (L->part >= P) { k->parts[l] = P; L->level++; L->part = 0; continue; }
+        float sc = L->gain / (2.0f * N);
+        int off = lev_start(l) + L->part * N, end = lev_end(l, L->len);
+        for (int i = 0; i < 2 * N; i++) {
+            int t = off + i;
+            L->buf[i] = (i < N && t < end) ? L->ir[t] * sc : 0.0f;
+        }
+        mfo_rfft(L->fft[l], L->buf, k->re[l][0] + (size_t)L->part * (N + 1), k->im[l][0] + (size_t)L->part * (N + 1));
+        L->part++;
+        max_parts--;
+    }
+    if (L->level >= CV_NLEV) L->done = 1;
+    return L->done;
+}
+
 void mfo_kernel_destroy(mfo_kernel_t *k)
 {
     if (!k) return;

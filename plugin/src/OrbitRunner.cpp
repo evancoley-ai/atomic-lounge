@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk plugin, ORBIT mode: the ORBIT core inside the plugin (see OrbitRunner.h).
+// Atomic Lounge plugin (formerly Vintage Chonk), ORBIT mode: the ORBIT core inside the plugin (see OrbitRunner.h).
 #include "OrbitRunner.h"
 #include <algorithm>
 #include <chrono>
@@ -59,6 +59,16 @@ Runner::Runner()
     for (int i = 0; i < numCore; i++) coreVal[(size_t) i].store (mfo_param_info (i)->def);
     mfo_config_default (&cfg);
     cfg.max_voices = 16;
+    for (auto& w : inWin) w.store (0.25f);
+    hMotion = hostIndexForSpecial (spMotion);
+    hDrift = hostIndexForSpecial (spPuckDrift);
+    hTrim = hostIndexForSpecial (spInTrim);
+    for (int l = 0; l < layers; l++)
+    {
+        hSrcIn[l] = hostIndexForSpecial (spSrcIn0 + l);
+        hImpIn[l] = hostIndexForSpecial (spImpIn0 + l);
+        hGate[l] = hostIndexForSpecial (spGate0 + l);
+    }
     worker = std::thread ([this] { workerLoop(); });
 }
 
@@ -134,6 +144,8 @@ void Runner::reset()
     drawnPhase = 0.0;
     spanPos = 0;
     vuL = vuR = pkL = pkR = 0.0f;
+    inVuL = inVuR = inPk = 0.0f;
+    for (auto& a : inApplied) a = InState();     // the engine's input flags were reset with it
 }
 
 // ----------------------------------------------------------------------------- message thread ---
@@ -145,9 +157,15 @@ void Runner::setCore (int id, float v)
     wcv.notify_all();       // keytrack switches are noticed by the worker
 }
 
+void Runner::setExtras (bool legacyWobble, const float window[layers])
+{
+    legacy.store (legacyWobble);
+    for (int l = 0; l < layers; l++) inWin[(size_t) l].store (window[l]);
+}
+
 void Runner::setPath (int mode, bool sync, const DrawnPath& p)
 {
-    pathMode.store (mode);
+    pathMode.store (juce::jlimit ((int) pathCircle, (int) pathDrawn, mode));
     syncOn.store (sync);
     drawnBuf.write (p);
 }
@@ -219,6 +237,7 @@ Runner::Meter Runner::meter() const
     m.vuL = mVuL.load(); m.vuR = mVuR.load();
     m.peakL = mPkL.load(); m.peakR = mPkR.load();
     m.voices = mVoices.load();
+    m.inL = mInL.load(); m.inR = mInR.load(); m.inPk = mInPk.load(); m.inCh = mInCh.load();
     return m;
 }
 
@@ -267,7 +286,7 @@ SourceAsset* Runner::buildSource (const SourceSpec& s, double rate, LayerView& v
         }
         v.srcTrace = true;
         v.srcName = s.patch.name.toUpperCase();
-        v.srcSub = juce::String::fromUTF8 ("CHONK PRESET \xc2\xb7 SYNTH");
+        v.srcSub = juce::String::fromUTF8 ("REGOLITH PRESET \xc2\xb7 SYNTH");
         return a;
     }
     if (s.kind == Src::sample && s.from == SampleFrom::print)
@@ -286,7 +305,7 @@ SourceAsset* Runner::buildSource (const SourceSpec& s, double rate, LayerView& v
         a->buf = { { a->print[0].data(), a->print[1].data() }, 2, n, (float) rate, (float) s.printNote };
         v.srcPeaks = peaksOf (a->print[0].data(), a->print[1].data(), n, 220);
         v.srcName = s.patch.name.toUpperCase();
-        v.srcSub = juce::String::fromUTF8 ("CHONK PRINT \xc2\xb7 ") + noteName ((float) s.printNote) + juce::String::fromUTF8 (" \xc2\xb7 ") + secondsText (s.printSeconds);
+        v.srcSub = juce::String::fromUTF8 ("REGOLITH PRINT \xc2\xb7 ") + noteName ((float) s.printNote) + juce::String::fromUTF8 (" \xc2\xb7 ") + secondsText (s.printSeconds);
         return a;
     }
     if (s.kind == Src::sample && s.sample != nullptr && s.sample->length() > 1)
@@ -343,7 +362,7 @@ ImpulseAsset* Runner::buildImpulse (int layer, const ImpulseSpec& s, double rate
         src = { { raw[0].data(), raw[1].data() }, 2, n, (float) rate, (float) s.printNote };
         root = (float) s.printNote;
         name = s.patch.name.toUpperCase();
-        sub = juce::String::fromUTF8 ("CHONK PRINT \xc2\xb7 ") + noteName ((float) s.printNote);
+        sub = juce::String::fromUTF8 ("REGOLITH PRINT \xc2\xb7 ") + noteName ((float) s.printNote);
     }
     else if (s.from == SampleFrom::generated)
     {
@@ -699,8 +718,36 @@ void Runner::updateControls (double dt)
         else if (h.target >= spFx0 && h.target < spFx0 + numFx) fxAmt[h.target - spFx0] = x;
         else if (h.target >= spMacro0 && h.target < spMacro0 + numMacros) mfo_set_mod_source (eng, MFO_MS_MACRO1 + (h.target - spMacro0), x);
     }
-    const int pm = pathMode.load (std::memory_order_relaxed);
     const bool sync = syncOn.load (std::memory_order_relaxed);
+    const bool motion = hMotion < 0 || hostNorm[hMotion] > 0.5f;
+    const int pm = motion ? pathMode.load (std::memory_order_relaxed) : (int) pathHold;
+    const bool leg = legacy.load (std::memory_order_relaxed);
+    // RATE at its minimum (free running) = stopped; 1.1.0 states keep their slow creep
+    const bool stopped = ! leg && ! sync && rateN <= 0.0f;
+    mfo_set_orbit_freeze (eng, stopped ? 1 : 0);
+    mfo_set_held_wobble (eng, leg ? -1.0f : (hDrift >= 0 ? hostNorm[hDrift] : 0.0f));
+    inGain = hTrim >= 0 ? std::exp2 (inTrimDbFromNorm (hostNorm[hTrim]) / 6.0206f) : 1.0f;
+    mfo_set_input_gain (eng, inGain);
+    for (int l = 0; l < layers; l++)
+    {
+        InState w;
+        w.src = hSrcIn[l] >= 0 && hostNorm[hSrcIn[l]] > 0.5f ? 1 : 0;
+        w.imp = hImpIn[l] >= 0 && hostNorm[hImpIn[l]] > 0.5f ? 1 : 0;
+        w.gate = hGate[l] >= 0 && hostNorm[hGate[l]] > 0.5f ? 1 : 0;
+        w.win = inWin[(size_t) l].load (std::memory_order_relaxed);
+        auto& a = inApplied[l];
+        if (w.src != a.src || w.imp != a.imp || w.gate != a.gate || w.win != a.win)
+        {
+            mfo_layer_set_input (eng, l, w.src, w.imp, w.gate, w.win);
+            // the layer's own source comes back when INPUT is switched off
+            if (a.src == 1 && w.src == 0 && actSrc[l] != nullptr)
+            {
+                if (actSrc[l]->kind == Src::synth) mfo_layer_set_synth (eng, l, &actSrc[l]->patch);
+                else if (actSrc[l]->kind == Src::sample) mfo_layer_set_sample (eng, l, &actSrc[l]->buf);
+            }
+            a = w;
+        }
+    }
     v[MFO_P_ORBIT_PATH] = pm == pathCircle ? 1.0f : pm == pathFig8 ? 3.0f : 0.0f;
     v[MFO_P_ORBIT_SYNC] = sync ? (float) rateBeats (rateN) : 0.0f;
     v[MFO_P_ORBIT_RATE] = rateHz (rateN);
@@ -711,7 +758,7 @@ void Runner::updateControls (double dt)
         v[MFO_LPARAM (l, MFO_L_MOD_SOURCE)] = actImp[l] != nullptr && actImp[l]->live >= 0 ? (float) (actImp[l]->live + 1) : 0.0f;
     if (pm == pathDrawn && drawn.n >= 2)
     {
-        const double hz = sync ? bpm / 60.0 / rateBeats (rateN) : rateHz (rateN);
+        const double hz = stopped ? 0.0 : sync ? bpm / 60.0 / rateBeats (rateN) : rateHz (rateN);
         const double dir = v[MFO_P_ORBIT_DIR] > 0.5f ? -1.0 : 1.0;
         drawnPhase += hz * dt * dir;
         drawnPhase -= std::floor (drawnPhase);
@@ -752,13 +799,15 @@ void Runner::updateControls (double dt)
     ageK = ageN < 0.001f ? 1.0f : 1.0f - std::exp (-2.0f * 3.14159265f * std::min (fc, 0.45f * (float) fs) / (float) fs);
 }
 
-void Runner::renderSpan (float* l, float* r, int n)
+void Runner::renderSpan (float* l, float* r, const float* il, const float* ir, int n)
 {
     updateControls ((double) n / fs);
-    mfo_render (eng, l, r, n);
+    mfo_render_input (eng, il, ir, l, r, n);
 }
 
-void Runner::process (float* left, float* right, int n, const mfm1::MidiEvent* events, int numEvents)
+static inline float cleanIn (float x) { return std::isfinite (x) ? juce::jlimit (-4.0f, 4.0f, x) : 0.0f; }
+
+void Runner::process (float* left, float* right, const float* inL, const float* inR, int n, const mfm1::MidiEvent* events, int numEvents)
 {
     const auto t0 = std::chrono::steady_clock::now();
     if (eng == nullptr)
@@ -796,11 +845,29 @@ void Runner::process (float* left, float* right, int n, const mfm1::MidiEvent* e
 
     // render in spans of at most 64 samples, split at the MIDI events
     constexpr int chunk = 1024;
-    float bufL[chunk], bufR[chunk];
+    float bufL[chunk], bufR[chunk], inBL[chunk], inBR[chunk];
+    const bool hasIn = inL != nullptr;
+    mInCh.store (inL == nullptr ? 0 : inR == nullptr ? 1 : 2, std::memory_order_relaxed);
     int ei = 0;
     for (int base = 0; base < n; base += chunk)
     {
         const int m = std::min (chunk, n - base);
+        if (hasIn)
+        {
+            float sl = 0, sr = 0;
+            for (int i = 0; i < m; i++)
+            {
+                inBL[i] = cleanIn (inL[base + i]);
+                inBR[i] = inR != nullptr ? cleanIn (inR[base + i]) : inBL[i];
+                const float a = inBL[i] * inGain, b = inBR[i] * inGain;
+                sl += a * a; sr += b * b;
+                inPk = std::max (inPk, std::max (std::fabs (a), std::fabs (b)));
+            }
+            const float k = 1.0f - std::exp ((float) -m / (0.3f * (float) fs));
+            inVuL += (std::sqrt (sl / m) - inVuL) * k;
+            inVuR += (std::sqrt (sr / m) - inVuR) * k;
+            inPk *= std::exp ((float) -m / (1.5f * (float) fs));
+        }
         int pos = 0;
         while (pos < m)
         {
@@ -815,7 +882,7 @@ void Runner::process (float* left, float* right, int n, const mfm1::MidiEvent* e
             }
             int end = std::min (m, pos + MFO_BLOCK - (int) (spanPos % MFO_BLOCK));
             if (ei < numEvents) end = std::min (end, std::max (pos + 1, std::min (events[ei].offset, n - 1) - base));
-            renderSpan (bufL + pos, bufR + pos, end - pos);
+            renderSpan (bufL + pos, bufR + pos, hasIn ? inBL + pos : nullptr, hasIn ? inBR + pos : nullptr, end - pos);
             spanPos += end - pos;
             pos = end;
         }
@@ -861,6 +928,8 @@ void Runner::process (float* left, float* right, int n, const mfm1::MidiEvent* e
     for (int i = 0; i < 4; i++) mW[i].store (w[i]);
     mVuL.store (vuL); mVuR.store (vuR); mPkL.store (pkL); mPkR.store (pkR);
     mVoices.store (mfo_active_voices (eng));
+    if (! hasIn) { inVuL = inVuR = inPk = 0.0f; }
+    mInL.store (inVuL); mInR.store (inVuR); mInPk.store (inPk);
     const double el = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
     const float load = (float) (el / ((double) n / fs));
     cpuAvg += (load - cpuAvg) * 0.05f;

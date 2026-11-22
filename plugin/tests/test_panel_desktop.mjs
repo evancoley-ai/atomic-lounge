@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Vintage Chonk VST3: the tablet panel with the desktop bridge, in headless Chrome (the plugin's WebView2
+// Atomic Lounge (formerly Vintage Chonk) VST3: the tablet panel with the desktop bridge, in headless Chrome (the plugin's WebView2
 // is Chromium too). Real browser mouse input (CDP Input.dispatchMouseEvent), no touch:
 //   * plugin/web/desktop_shim.js: window.AndroidSynth over a fake JUCE backend; boot shows the host's
 //     sound (MFHostInit) instead of F01; edits go out as 'patch' events with the host serial; the preset
@@ -7,7 +7,9 @@
 //     computer-keyboard notes; save / delete keep the local list.
 //   * mouse: drag, ctrl-drag (fine), wheel, shift-wheel (fine), double-click = default, the keyboard.
 //   * the ORBIT panel (plugin/web/orbit): state from the plugin, sliders, knobs, the orbit field (puck, nodes,
-//     paths, drawing), effects, macro assign, inspectors, presets, host pushes, a dropped file, a screenshot.
+//     paths, drawing), effects, macro assign, inspectors, presets, host pushes, a dropped file, a screenshot;
+//     1.2.0: LIVE INPUT as a source / impulse (gate, window), the input meter and trim, the MOTION switch,
+//     park-on-drag, double-click restart, PUCK DRIFT, RATE STOP, the REGOLITH | ORBIT switch, the ATOMIC LOUNGE name.
 //   node plugin/tests/test_panel_desktop.mjs
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -80,6 +82,10 @@ try {
   check(boot.sent.includes('hello') && boot.sent.includes('ui'), `boot says hello and reports its preset entry (${boot.sent.join(',')})`);
   check(boot.users.join() === 'MY PAD', `user presets from the plugin's folder (${boot.users.join()})`);
   check(/48\.0 kHz/.test(boot.info) && /HOST MIDI/.test(boot.info), `status line from the plugin (${boot.info})`);
+  const nm = JSON.parse(await ev(`JSON.stringify({ sw: [...document.querySelectorAll('#mode-switch b')].map((b) => b.textContent + ':' + b.dataset.m),
+    title: (document.querySelector('#panel-foot .title') || {}).textContent, doc: document.title })`));
+  check(nm.sw.join() === 'REGOLITH:chonk,ORBIT:orbit' && nm.title === 'ATOMIC LOUNGE' && nm.doc === 'Atomic Lounge',
+    `plugin names on the tablet panel: switch ${nm.sw.join(' | ')}, wordmark ${nm.title}, title ${nm.doc}`);
 
   // ---- mouse, through real browser input
   const box = async (sel) => JSON.parse(await ev(`(() => { const r = document.querySelector('${sel}').getBoundingClientRect(); return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); })()`));
@@ -185,11 +191,22 @@ try {
 // orbit_panel_state.json, else plugin/tests/orbit_panel_state.json), then real mouse / keyboard input, and the
 // events that go back to the plugin.
 async function orbitPanel() {
-  const cands = ['plugin/build-dev/test_out/orbit_panel_state.json', 'plugin/build/test_out/orbit_panel_state.json', 'plugin/tests/orbit_panel_state.json']
+  const cands = ['plugin/build-dev/test_out/orbit_panel_state.json', 'plugin/build/test_out/orbit_panel_state.json', 'plugin/tests/orbit_panel_state.json',
+    'plugin/test_out_saved/build-dev/test_out/orbit_panel_state.json', 'plugin/test_out_saved/build/test_out/orbit_panel_state.json']
     .map((p) => path.join(ROOT, p)).filter((p) => fs.existsSync(p))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);   // the newest host test run's fixture
   if (!cands.length) { check(false, 'ORBIT panel: no state fixture (run the host test first)'); return; }
   const fixture = JSON.parse(fs.readFileSync(cands[0], 'utf8'));
+  // a fixture from before 1.2.0: the 1.2.0 host parameters and settings as the plugin adds them
+  const add12 = [['orbit_motion', 'ORBIT Motion', fixture.settings.path ? 1 : 0], ['orbit_puck_drift', 'ORBIT Puck Drift', 0], ['orbit_input_trim', 'ORBIT Input Trim', 0.5]];
+  for (let l = 1; l <= 3; l++) add12.push([`orbit_l${l}_src_input`, `ORBIT L${l} Source Input`, 0]);
+  for (let l = 1; l <= 3; l++) add12.push([`orbit_l${l}_imp_input`, `ORBIT L${l} Impulse Input`, 0]);
+  for (let l = 1; l <= 3; l++) add12.push([`orbit_l${l}_input_gate`, `ORBIT L${l} Input Gate`, 0]);
+  const had12 = fixture.host.some((h) => h.id === 'orbit_motion');
+  add12.forEach(([id, name, v], k) => { if (!fixture.host.some((h) => h.id === id)) { fixture.host.push({ id, name, target: 2000 + k, map: 'special' }); fixture.hostValues.push(v); } });
+  if (!fixture.settings.input) fixture.settings.input = { trim: 0, layers: [0, 1, 2].map(() => ({ src: false, imp: false, gate: 0, window: 0.25 })) };
+  if (!fixture.settings.shape) fixture.settings.shape = fixture.settings.path || 1;
+  console.log(`  ORBIT fixture: ${path.relative(ROOT, cands[0])}${had12 ? '' : ' (1.2.0 parameters added by the test)'}`);
   const prof2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mfm1-orbit-'));
   const proc2 = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${prof2}`, '--no-first-run',
     '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1', 'about:blank'], { stdio: 'ignore' });
@@ -377,6 +394,99 @@ async function orbitPanel() {
     check(st.nix === '13' && o.length === 0, `host automation lands on the panel, no echo (L1 BODY nixie ${st.nix}, ${o.length} sends)`);
     check(/translate/.test(st.puck) && /VOICES 06\/48/.test(st.stat) && /CPU 11/.test(st.stat) && st.blend === '42 18 31 _9'.replace('_', '0'),
       `meters: puck ${st.puck}, status "${st.stat}", blend ${st.blend}`);
+    // ---- 1.2.0: names
+    const nm2 = JSON.parse(await ev(`JSON.stringify({ word: [...document.querySelectorAll('.band ~ .abs')].map((e) => e.textContent).find((t) => /LOUNGE/.test(t)) || '',
+      modes: [...document.querySelectorAll('#modesw .modeb')].map((e) => e.textContent),
+      text: [...document.querySelectorAll('#body *')].filter((e) => !e.closest('.card .lbl.clk, .card .sub') && e.children.length === 0).map((e) => e.textContent).join(' ') })`));
+    check(/ATOMIC\s*LOUNGE/.test(nm2.word.replace(/\u2009/g, ' ')) && nm2.modes.join('|') === 'REGOLITH|ORBIT' && !/CHONK/i.test(nm2.text),
+      `ORBIT panel names: wordmark ${nm2.word}, switch ${nm2.modes.join(' | ')}, no CHONK on the panel`);
+    // ---- LIVE INPUT as layer 1's source: the Source Input host parameter, the inspector's gate
+    const esc = () => send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await esc(); await clear();
+    await click(...await center(`document.querySelectorAll('.card')[0].querySelectorAll('.pill')[0].children[2]`));
+    o = await ops();
+    const si1 = hidx('orbit_l1_src_input');
+    const lab1 = JSON.parse(await ev(`JSON.stringify({ name: document.querySelectorAll('.card')[0].querySelector('.lbl.clk').textContent,
+      on: [...document.querySelectorAll('.card')[0].querySelectorAll('.pill')[0].children].findIndex((b) => b.classList.contains('on')),
+      insp: [...document.querySelectorAll('#insp .btn.on')].map((b) => b.textContent) })`));
+    check(o.some((x) => x.op === 'o.host' && x.a[0] === si1 && x.a[1] === 1) && !o.some((x) => x.op === 'o.src'),
+      `SOURCE INPUT sends ORBIT L1 Source Input = 1 (${o.map((x) => x.op + JSON.stringify(x.a)).join(' ')})`);
+    check(lab1.name === 'LIVE INPUT' && lab1.on === 2 && lab1.insp.includes('LIVE INPUT') && lab1.insp.includes('THRU'),
+      `layer 1 shows LIVE INPUT, its pill and the inspector's LIVE INPUT + THRU (${JSON.stringify(lab1)})`);
+    await clear();
+    await click(...await center(`[...document.querySelectorAll('#insp .btn')].find((b) => b.textContent === 'NOTE')`));
+    o = await ops();
+    check(o.some((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_l1_input_gate') && x.a[1] === 1)
+      && /NOTE GATE/.test(await ev(`document.querySelectorAll('.card')[0].querySelector('.sub').textContent`)), 'GATE NOTE sends ORBIT L1 Input Gate = 1 and the layer reads NOTE GATE');
+    // back to SYNTH: the input flag goes off first, then the source as before
+    await esc(); await clear();
+    await click(...await center(`document.querySelectorAll('.card')[0].querySelectorAll('.pill')[0].children[1]`));
+    o = await ops();
+    const offAt = o.findIndex((x) => x.op === 'o.host' && x.a[0] === si1 && x.a[1] === 0), srcAt = o.findIndex((x) => x.op === 'o.src');
+    check(offAt >= 0 && srcAt > offAt, `SYNTH after INPUT: Source Input = 0, then o.src (${o.map((x) => x.op).join(',')})`);
+    // LIVE INPUT as layer 2's impulse, a 500 ms window
+    await esc(); await clear();
+    await click(...await center(`document.querySelectorAll('.card')[1].querySelectorAll('.pill')[1].children[3]`));
+    await click(...await center(`[...document.querySelectorAll('#insp .btn')].find((b) => b.textContent === '500 MS')`));
+    o = await ops();
+    const impSub = await ev(`document.querySelectorAll('.card')[1].querySelector('.sub.c').textContent`);
+    check(o.some((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_l2_imp_input') && x.a[1] === 1) && o.some((x) => x.op === 'o.window' && x.a[0] === 1 && x.a[1] === 0.5)
+      && /500 ms WINDOW/.test(impSub), `IMPULSE INPUT: ORBIT L2 Impulse Input = 1, o.window [1, 0.5], reads "${impSub}"`);
+    await esc();
+    // the input meter: no bus, then a stereo signal with a peak
+    const inm = async (m) => { await ev(`ORB.meter(${JSON.stringify(Object.assign({ cpu: 0.1, voices: 0, rate: 48000, latencyMs: 7.2, puck: [0, 0], w: [0.25, 0.25, 0.25, 0.25], vu: [0, 0], pk: [0, 0], midi: 3 }, m))})`); await ev(`ORB.meter(${JSON.stringify(Object.assign({ cpu: 0.1, voices: 0, rate: 48000, latencyMs: 7.2, puck: [0, 0], w: [0.25, 0.25, 0.25, 0.25], vu: [0, 0], pk: [0, 0], midi: 3 }, m))})`); };
+    const inState = () => ev(`JSON.stringify({ none: getComputedStyle(document.querySelector('#inmeter .abs')).display !== 'none', bars: [...document.querySelectorAll('#inmeter .inbar i')].map((i) => i.style.transform),
+      shown: [...document.querySelectorAll('#inmeter .inbar')].map((b) => b.style.display !== 'none'), peak: document.querySelector('#inmeter .jewel').classList.contains('on'),
+      hint: document.querySelectorAll('.card')[1].querySelectorAll('.win.wave')[1].querySelector('.hint').textContent })`);
+    for (let k = 0; k < 10; k++) await inm({ in: [0, 0, 0], inCh: 0 });
+    const n0 = JSON.parse(await inState());
+    for (let k = 0; k < 10; k++) await inm({ in: [0.5, 0.25, 0.95], inCh: 2 });
+    const n2 = JSON.parse(await inState());
+    const sub2 = await ev(`[...document.querySelectorAll('.card')[4].querySelectorAll('.sub.c')].map((e) => e.textContent).find((t) => /STEREO|MONO|NO INPUT/.test(t)) || ''`);
+    check(n0.none && n0.shown.every((x) => !x) && n0.hint === 'NO INPUT BUS', `input meter without a bus: NO INPUT BUS (${JSON.stringify(n0)})`);
+    check(!n2.none && n2.shown.every((x) => x) && n2.peak && n2.bars.every((b) => /scaleY\(0\.[5-9]/.test(b) || /scaleY\(1/.test(b)) && /STEREO/.test(sub2) && n2.hint === '',
+      `input meter, stereo at -6 / -12 dBFS with a peak: ${n2.bars.join(' ')}, "${sub2}"`);
+    // TRIM knob and PUCK DRIFT knob: their host parameters
+    await clear();
+    const [tx, ty] = await center(`document.getElementById('intrim')`);
+    await mouse('mouseWheel', tx, ty, { deltaY: -100 });
+    const [dx, dy] = await center(`document.querySelector('svg.puckdrift')`);
+    await mouse('mouseWheel', dx, dy, { deltaY: -100 });
+    o = await ops();
+    const tr = o.find((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_input_trim')), pd = o.find((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_puck_drift'));
+    check(tr && tr.a[1] > 0.5 && /\+1\.2 dB/.test(await ev(`document.getElementById('intrim').parentElement.querySelector('.sub.c[style*="180px"]').textContent`)),
+      `TRIM wheel up: ORBIT Input Trim ${tr && tr.a[1].toFixed(3)} (+1.2 dB)`);
+    check(pd && pd.a[1] > 0, `PUCK DRIFT wheel up: ORBIT Puck Drift ${pd && pd.a[1].toFixed(3)}`);
+    // MOTION: the switch, park on drag, double-click restarts
+    const mot = () => ev(`document.querySelector('#motionsw b').textContent`);
+    await clear();
+    await click(...pills[0]);                 // HOLD: motion off
+    const m0 = await mot();
+    await click(...await center(`document.getElementById('motionsw')`));
+    const m1 = await mot();
+    o = await ops();
+    check(m0 === 'OFF' && m1 === 'ON' && o.some((x) => x.op === 'o.path' && x.a[0] === 0) && o.some((x) => x.op === 'o.motion' && x.a[0] === true),
+      `MOTION switch: HOLD = OFF, the switch turns it ON (o.motion true) (${m0} -> ${m1})`);
+    await click(...pills[1]);                 // CIRCLE (the last shape was DRAWN, where a drag on the field draws)
+    await clear();
+    await drag(fx + 50, fy - 30, 10, 5, 3);
+    o = await ops();
+    const pk = o.find((x) => x.op === 'o.park');
+    check(pk && o[0].op === 'o.park' && pk.a[0] > 0 && pk.a[1] > 0 && (await mot()) === 'OFF' && o.some((x) => x.op === 'o.host' && x.a[0] === hidx('orbit_puck_x')),
+      `dragging the moving puck parks it (o.park ${pk ? JSON.stringify(pk.a) : '-'}), motion OFF, then the drag moves it`);
+    await clear();
+    await mouse('mousePressed', fx - 40, fy + 20, { clickCount: 1 }); await mouse('mouseReleased', fx - 40, fy + 20, { clickCount: 1 });
+    await mouse('mousePressed', fx - 40, fy + 20, { clickCount: 2 }); await mouse('mouseReleased', fx - 40, fy + 20, { clickCount: 2 });
+    o = await ops();
+    check(o.some((x) => x.op === 'o.motion' && x.a[0] === true) && (await mot()) === 'ON', `double-click on the field restarts motion (${o.map((x) => x.op).join(',')})`);
+    // the host leads: DAW automation of ORBIT Motion and of Layer 3's Source Input lands on the panel, no echo
+    await clear();
+    await ev(`ORB.values({ ${hidx('orbit_motion')}: 0, ${hidx('orbit_l3_src_input')}: 1, ${hidx(H.find((h) => h.target === 1000) ? H.find((h) => h.target === 1000).id : 'orbit_rate')}: 0 })`);
+    const au = JSON.parse(await ev(`JSON.stringify({ mot: document.querySelector('#motionsw b').textContent, l3: document.querySelectorAll('.card')[2].querySelector('.lbl.clk').textContent,
+      rate: document.querySelectorAll('.card')[3].querySelectorAll('.sub.c')[0].textContent })`));
+    o = await ops();
+    check(au.mot === 'OFF' && au.l3 === 'LIVE INPUT' && o.length === 0, `automation: Motion OFF, L3 Source Input ON reach the panel, no echo (${JSON.stringify(au)})`);
+    check(au.rate === 'STOP', `RATE at its minimum reads STOP (sync free): ${au.rate}`);
     // drop a file on layer 3's source window: read in the page, sent in chunks
     await clear();
     await ev(`(() => { const w = document.querySelectorAll('.card')[2].querySelectorAll('.win.wave')[0]; const dt = new DataTransfer();
@@ -395,15 +505,16 @@ async function orbitPanel() {
     const ch = await center(`document.querySelector('.modeb.off')`);
     await click(...ch);
     o = await ops();
-    check(o.some((x) => x.op === 'midi' && x.a[0] === 0x90 && x.a[1] === 60) && o.some((x) => x.op === 'o.mode' && x.a[0] === 'chonk'), `computer keyboard notes and the CHONK switch (${o.map((x) => x.op).join(',')})`);
+    check(o.some((x) => x.op === 'midi' && x.a[0] === 0x90 && x.a[1] === 60) && o.some((x) => x.op === 'o.mode' && x.a[0] === 'chonk'), `computer keyboard notes and the REGOLITH switch (${o.map((x) => x.op).join(',')})`);
     // a clean screenshot of the panel as the plugin shows it (state as pushed, a chord's meters)
     await send('Page.navigate', { url: pathToFileURL(path.join(ROOT, 'plugin/web/orbit/orbit.html')).href });
     for (let i = 0; i < 50 && !(await ev('document.documentElement.dataset.ready === "1"')); i++) await sleep(100);
     await ev(`ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [0.38, 0.61], w: [0.42, 0.18, 0.31, 0.09], vu: [0.12, 0.12], pk: [0.4, 0.4], midi: 3 }); document.getElementById('toast').classList.add('hidden')`);
-    for (let k = 0; k < 40; k++) { const t = 4.2 + k * 0.012; await ev(`ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [${(0.05 + 0.55 * Math.cos(t)).toFixed(3)}, ${(-0.05 + 0.5 * Math.sin(t)).toFixed(3)}], w: [0.42, 0.18, 0.31, 0.09], vu: [0.12, 0.12], pk: [0.4, 0.4], midi: 3 })`); }
+    for (let k = 0; k < 40; k++) { const t = 4.2 + k * 0.012; await ev(`ORB.meter({ cpu: 0.11, voices: 6, rate: 48000, latencyMs: 7.23, puck: [${(0.05 + 0.55 * Math.cos(t)).toFixed(3)}, ${(-0.05 + 0.5 * Math.sin(t)).toFixed(3)}], w: [0.42, 0.18, 0.31, 0.09], vu: [0.12, 0.12], pk: [0.4, 0.4], midi: 3, in: [${(0.1 + 0.06 * Math.sin(k)).toFixed(3)}, ${(0.08 + 0.05 * Math.cos(k)).toFixed(3)}, 0.3], inCh: 2 })`); }
     await sleep(150);
     const shot = await send('Page.captureScreenshot', { format: 'png' });
-    const out = cands[0].includes('test_out') ? path.dirname(cands[0]) : path.join(ROOT, 'plugin/build/test_out');
+    // next to a live host-test fixture; never into plugin/test_out_saved (kept screenshots for the guide)
+    const out = cands[0].includes('test_out') && !cands[0].includes('test_out_saved') ? path.dirname(cands[0]) : path.join(ROOT, 'plugin/build-dev/test_out');
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'orbit_panel_chrome.png'), Buffer.from(shot.result.data, 'base64'));
     check(errors.length === 0, `ORBIT panel: no page errors (${errors.slice(0, 3).join(' / ')})`);
